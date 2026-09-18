@@ -49,7 +49,7 @@ describe('choosing an older source', () => {
     expect(finished.status).toBe('completed');
 
     const { sources } = (await get(app, '/api/sources')).json();
-    const byId = new Map(sources.map((s: any) => [s.artifact.id, s]));
+    const byId = new Map<string, any>(sources.map((s: any) => [s.artifact.id, s]));
     expect(sources.every((s: any) => s.artifact.kind !== 'video')).toBe(true);
     expect(byId.get(finished.steps[0].artifact.id)?.label).toBe('step 1 of three steps');
     expect(byId.get(finished.steps[1].artifact.id)?.label).toBe('step 2 of three steps');

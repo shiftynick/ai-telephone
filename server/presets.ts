@@ -16,6 +16,18 @@ const step = (type: StepType, modelId: string, extra: Partial<StepDefinition> = 
   params: type === 'text_to_image' ? { aspect_ratio: '16:9' } : type.endsWith('video') ? { resolution: '768P', duration: 5, prompt_expansion_mode: 'balanced' } : {},
   ...extra,
 });
+/** Fastest tested model per step type (2026-09-18 smoke run). Used for auto-bridge steps and adventure mode. */
+const FASTEST: Record<StepType, string> = {
+  image_to_text: FAST,
+  text_to_image: LITE_IMAGE,
+  text_to_text: 'openai/gpt-4.1-mini',
+  image_to_video: FAL_ENDPOINTS.image_to_video,
+  text_to_video: FAL_ENDPOINTS.text_to_video,
+};
+export function defaultStep(type: StepType, extra: Partial<StepDefinition> = {}): StepDefinition {
+  return { ...step(type, FASTEST[type]), id: newId('stp'), ...extra };
+}
+
 const describe = (m = FAST, extra?: Partial<StepDefinition>) => step('image_to_text', m, extra);
 const draw = (m = LITE_IMAGE) => step('text_to_image', m);
 const animate = () => step('image_to_video', FAL_ENDPOINTS.image_to_video);

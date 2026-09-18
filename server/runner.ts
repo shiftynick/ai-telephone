@@ -8,7 +8,7 @@ import type { EventBus } from './events.ts';
 
 type RunRow = {
   id: string; name: string; snapshot: string; source_artifact_id: string; status: RunStatus; status_reason: string | null;
-  current_step_index: number; single_step: number; pause_requested: number; budget_usd: number | null; imported: number;
+  current_step_index: number; single_step: number; pause_requested: number; budget_usd: number | null; imported: number; interactive: number;
   created_at: number; started_at: number | null; finished_at: number | null;
 };
 
@@ -36,25 +36,43 @@ export class Runner {
 
   // ---- creation ------------------------------------------------------
 
-  createRun(opts: { preset: PresetBody; sourceArtifactId: string; budgetUsd: number | null; name?: string }): string {
+  createRun(opts: { preset: PresetBody; sourceArtifactId: string; budgetUsd: number | null; name?: string; interactive?: boolean }): string {
     const src = this.store.get(opts.sourceArtifactId);
     if (!src) throw new RunError(400, 'Source artifact not found.');
-    if (src.kind !== opts.preset.startingKind && !(opts.preset.steps[0] && STEP_TYPES[opts.preset.steps[0].type].input === src.kind))
-      throw new RunError(400, `This pipeline starts from ${opts.preset.startingKind}, but the selected source is ${src.kind}.`);
-    if (!opts.preset.steps.length) throw new RunError(400, 'Add at least one step.');
+    // An interactive run starts empty: its steps are chosen one at a time (appendStep).
+    if (!opts.preset.steps.length && !opts.interactive) throw new RunError(400, 'Add at least one step.');
     const issues = validateChain(src.kind, opts.preset.steps);
     if (issues.length) throw new RunError(400, `Step ${issues[0].index + 1}: ${issues[0].message}`);
     const id = newId('run');
     // Immutable snapshot: later preset edits never affect this run.
     const snapshot: PresetBody = JSON.parse(JSON.stringify({ ...opts.preset, startingKind: src.kind }));
     tx(this.db, () => {
-      this.db.prepare('INSERT INTO runs(id, name, snapshot, source_artifact_id, status, budget_usd, created_at) VALUES(?,?,?,?,?,?,?)')
-        .run(id, opts.name ?? opts.preset.name, JSON.stringify(snapshot), src.id, 'ready', opts.budgetUsd, now());
+      this.db.prepare('INSERT INTO runs(id, name, snapshot, source_artifact_id, status, budget_usd, interactive, created_at) VALUES(?,?,?,?,?,?,?,?)')
+        .run(id, opts.name ?? opts.preset.name, JSON.stringify(snapshot), src.id, 'ready', opts.budgetUsd, Number(!!opts.interactive), now());
       snapshot.steps.forEach((s, i) =>
         this.db.prepare('INSERT INTO step_executions(id, run_id, step_index, definition_id) VALUES(?,?,?,?)').run(newId('stx'), id, i, s.id));
     });
     this.emit(id, 'run.created', {});
     return id;
+  }
+
+  /**
+   * Interactive runs only: append ONE step to the end. Existing steps are never edited or reordered, so
+   * everything already executed stays an immutable record. A completed run is re-opened (paused).
+   */
+  appendStep(id: string, def: StepDefinition) {
+    tx(this.db, () => {
+      const r = this.row(id);
+      if (!r.interactive || r.imported) throw new RunError(400, 'Steps can only be added to an interactive run.');
+      if (!['ready', 'paused', 'completed'].includes(r.status)) throw new RunError(409, `Run is ${r.status}; wait for it or fix it before adding a step.`);
+      const snap = this.snapshot(r);
+      const issues = validateChain(snap.startingKind, [...snap.steps, def]);
+      if (issues.length) throw new RunError(400, issues[issues.length - 1].message);
+      snap.steps.push(def);
+      this.db.prepare("UPDATE runs SET snapshot = ?, status = CASE WHEN status = 'completed' THEN 'paused' ELSE status END, status_reason = NULL, finished_at = NULL WHERE id = ?").run(JSON.stringify(snap), id);
+      this.db.prepare('INSERT INTO step_executions(id, run_id, step_index, definition_id) VALUES(?,?,?,?)').run(newId('stx'), id, snap.steps.length - 1, def.id);
+    });
+    this.emit(id, 'run.step_added', {});
   }
 
   // ---- control -------------------------------------------------------
@@ -330,13 +348,13 @@ export class Runner {
     return {
       id: r.id, name: r.name, status: r.status, statusReason: r.status_reason ?? undefined, startingKind: snap.startingKind, source: this.store.view(this.store.get(r.source_artifact_id))!,
       steps, currentStepIndex: r.current_step_index, budgetUsd: r.budget_usd, costActualUsd: c.actual, costEstimatedUsd: c.estimated, costUnknownCount: c.unknown,
-      createdAt: r.created_at, startedAt: r.started_at ?? undefined, finishedAt: r.finished_at ?? undefined, imported: !!r.imported,
+      createdAt: r.created_at, startedAt: r.started_at ?? undefined, finishedAt: r.finished_at ?? undefined, imported: !!r.imported, interactive: !!r.interactive,
     };
   }
 
   list() {
-    return (this.db.prepare('SELECT id, name, status, created_at, imported, snapshot FROM runs ORDER BY created_at DESC LIMIT 100').all() as any[]).map((r) => ({
-      id: r.id, name: r.name, status: r.status as RunStatus, createdAt: r.created_at, imported: !!r.imported, stepCount: JSON.parse(r.snapshot).steps.length,
+    return (this.db.prepare('SELECT id, name, status, created_at, imported, interactive, snapshot FROM runs ORDER BY created_at DESC LIMIT 100').all() as any[]).map((r) => ({
+      id: r.id, name: r.name, status: r.status as RunStatus, createdAt: r.created_at, imported: !!r.imported, interactive: !!r.interactive, stepCount: JSON.parse(r.snapshot).steps.length,
     }));
   }
 

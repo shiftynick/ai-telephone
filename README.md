@@ -49,7 +49,13 @@ Other scripts: `npm run dev` (Vite + watch server, open the printed `localhost:5
    result appears as it completes; switch to **Final-result-first** to hide everything, reveal the final
    video, then rewind. **Compare** shows start vs final side by side. Video needs a click on Play
    (browsers block autoplay with sound).
-5. Any completed run can be **replayed on the projector** with zero provider calls (works with networking
+5. **Adventure mode (projector, host only):** on the projector's control bar choose **✨ New…** (or *Start an
+   adventure* on the idle screen), pick a starting sentence, upload, or any earlier image/text, then pick the
+   next action for whatever is on screen — *Describe it / Animate it* for an image, *Draw it / Retell it /
+   Film it* for text — as many times as you like, with an optional twist ("as a watercolour"). Each choice is
+   exactly one provider call using the fastest tested model. Open an earlier step in the step bar and choose an
+   action there to **branch** into a new adventure; the original is left untouched. A video ends a path.
+6. Any completed run can be **replayed on the projector** with zero provider calls (works with networking
    disabled). A real saved rehearsal run ships in `fixtures/rehearsal` and is imported on first start.
 
 If phone → laptop does not connect: venue Wi-Fi often isolates clients. Use a personal hotspot, or transfer
@@ -85,8 +91,14 @@ talk, not during a pause. Drift is an observation, not a guaranteed outcome.
 Every step receives **only its immediate predecessor's primary artifact plus its own static instruction**, in a
 brand-new provider request: no history, no original photo, no earlier text, no filenames/EXIF, no run title,
 no reference images (`input_references` is never sent). One primary artifact per step; model commentary that
-accompanies an image is discarded. Adjacency (image/text/video) is validated before any paid request and is
-never auto-repaired. `tests/` proves this by inspecting the actual provider payloads.
+accompanies an image is discarded. Adjacency (image/text/video) is validated before any paid request.
+`tests/` proves this by inspecting the actual provider payloads.
+
+One deliberate, *visible* convenience (a change from the original plan, at the host's request): if the accepted
+source does not match the pipeline's first step — a sentence into an image pipeline, or a photo into a text
+pipeline — the run gets one **auto-added bridge step** at the front (text → image or image → text). It is a
+normal step: shown in the editor notice, the run timeline ("auto-added bridge"), and on the projector, and it
+obeys the same predecessor-only rule. Nothing inside a pipeline is ever repaired, and no conversion is hidden.
 
 ## Tested model/provider combinations
 

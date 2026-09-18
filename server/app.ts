@@ -10,7 +10,7 @@ import { type DB, newToken, now, openDb, sha256 } from './db.ts';
 import { ArtifactStore } from './artifacts.ts';
 import { EventBus, type BusEvent } from './events.ts';
 import { ModelCatalog } from './models.ts';
-import { PresetStore } from './presets.ts';
+import { PresetStore, defaultStep } from './presets.ts';
 import { Runner, RunError } from './runner.ts';
 import { Sessions } from './sessions.ts';
 import { MediaError, normalizeImage } from './media.ts';
@@ -18,7 +18,7 @@ import { OpenRouterAdapter } from './providers/openrouter.ts';
 import { FalAdapter } from './providers/fal.ts';
 import { MockAdapter } from './providers/mock.ts';
 import type { Adapters } from './providers/types.ts';
-import { PresetBody, StepDefinition, validateChain, type StepIssue } from '../shared/types.ts';
+import { PresetBody, STEP_TYPES, StepDefinition, StepType, bridgeType, validateChain, type StepIssue } from '../shared/types.ts';
 
 const HOST_COOKIE = 'tele_host';
 const HOST_SESSION_MS = 12 * 3600_000;
@@ -255,15 +255,40 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
 
   app.get('/api/runs', { preHandler: requireHost }, async () => ({ runs: runner.list() }));
   app.post('/api/runs', { preHandler: requireHost }, async (req, reply) => {
-    const b = z.object({ preset: PresetBody, sourceArtifactId: z.string().optional(), budgetUsd: z.number().positive().nullable().optional(), select: z.boolean().default(true) }).parse(req.body);
+    const b = z.object({
+      preset: PresetBody, sourceArtifactId: z.string().optional(), budgetUsd: z.number().positive().nullable().optional(), select: z.boolean().default(true),
+      autoBridge: z.boolean().default(true), interactive: z.boolean().default(false),
+    }).parse(req.body);
     const sourceId = b.sourceArtifactId ?? sessions.current().source_artifact_id;
     if (!sourceId) return reply.code(400).send({ error: 'Accept a source image (or enter starting text) first.' });
     const src = store.get(sourceId);
     if (!src) return reply.code(400).send({ error: 'Source artifact not found.' });
-    const issues = chainIssues({ startingKind: src.kind as any, steps: b.preset.steps });
-    if (issues.length) return reply.code(400).send({ error: `Step ${issues[0].index + 1}: ${issues[0].message}`, issues });
-    const id = runner.createRun({ preset: b.preset, sourceArtifactId: sourceId, budgetUsd: b.budgetUsd === undefined ? cfg.defaultBudgetUsd : b.budgetUsd });
+    // Source and pipeline disagree (e.g. a sentence into an image pipeline): prepend ONE explicit, visible
+    // bridge step. It is a normal step in the run, marked auto, shown to host and audience like any other.
+    let steps = b.preset.steps;
+    let bridged = false;
+    if (b.autoBridge && steps.length) {
+      const need = STEP_TYPES[steps[0].type].input;
+      const bt = src.kind !== need ? bridgeType(src.kind as any, need) : null;
+      if (bt) { steps = [defaultStep(bt, { auto: true }), ...steps]; bridged = true; }
+    }
+    const issues = chainIssues({ startingKind: src.kind as any, steps });
+    if (issues.length) return reply.code(400).send({ error: `Step ${issues[0].index + 1 - Number(bridged)}: ${issues[0].message}`, issues });
+    const id = runner.createRun({ preset: { ...b.preset, steps }, sourceArtifactId: sourceId, budgetUsd: b.budgetUsd === undefined ? cfg.defaultBudgetUsd : b.budgetUsd, interactive: b.interactive });
     if (b.select) sessions.selectRun(id, false);
+    return runner.view(id);
+  });
+  // Interactive ("adventure") runs: choose the next action one step at a time. The server picks the fastest
+  // tested model for the type; an optional twist is appended to the static instruction.
+  app.post('/api/runs/:id/steps', { preHandler: requireHost }, async (req, reply) => {
+    const id = (req.params as any).id;
+    const b = z.object({ type: StepType, twist: z.string().trim().max(500).optional(), modelId: z.string().min(1).max(200).optional() }).parse(req.body);
+    const def = defaultStep(b.type, b.modelId ? { modelId: b.modelId } : {});
+    if (b.twist) def.instruction = [def.instruction, `Additional direction: ${b.twist}`].filter(Boolean).join('\n\n');
+    const problem = catalog.validateStep(def);
+    if (problem) return reply.code(400).send({ error: problem });
+    runner.appendStep(id, def);
+    runner.start(id, true); // run exactly this one step
     return runner.view(id);
   });
   app.get('/api/runs/:id', { preHandler: requireHost }, async (req) => runner.view((req.params as any).id));

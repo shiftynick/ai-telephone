@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   PRESET_SCHEMA_VERSION,
+  STEP_TYPES,
+  bridgeType,
   validateChain,
   type ModelsView,
   type Preset,
@@ -280,7 +282,9 @@ export default function Host() {
     if (sourceArtifactId) {
       // "New run from this artifact": adjacency is judged against that artifact's kind.
       const kind = run?.steps.find((s) => s.artifact?.id === sourceArtifactId)?.artifact?.kind ?? editor.startingKind;
-      const adj = validateChain(kind, editor.steps);
+      // A one-step mismatch at the seam is bridged automatically by the server; only warn about the rest.
+      const first = editor.steps[0] ? STEP_TYPES[editor.steps[0].type].input : kind;
+      const adj = bridgeType(kind, first) ? [] : validateChain(kind, editor.steps);
       if (adj.length && !window.confirm(`This pipeline does not fit a ${kind} starting artifact:\n\n${adj[0].message}\n\nTry anyway?`)) return;
     } else if (createDisabledReason) {
       setError(createDisabledReason);

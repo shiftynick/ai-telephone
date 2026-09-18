@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ArtifactView, PresentStage, PresentState, RunView } from '../../shared/types.ts';
-import { ALLOWED_ACTIONS, ApiError, api, mediaUrl, type RevealAction, type RunAction } from './api.ts';
+import { NEXT_ACTIONS, PRESET_SCHEMA_VERSION, type ArtifactKind, type ArtifactView, type PresentStage, type PresentState, type RunView, type StepType } from '../../shared/types.ts';
+import { ALLOWED_ACTIONS, ApiError, api, mediaUrl, type RevealAction, type RunAction, type SourceCandidate } from './api.ts';
 import { cx, fmtDuration, fmtMoney } from './util.tsx';
 
 function VideoStage({ src, poster }: { src: string; poster?: string }) {
@@ -71,6 +71,78 @@ function StageArtifact({ a, token, label }: { a: ArtifactView; token: string; la
   );
 }
 
+const ACTION_LABEL: Record<StepType, string> = {
+  image_to_text: '📝 Describe it',
+  image_to_video: '🎬 Animate it',
+  text_to_image: '🎨 Draw it',
+  text_to_text: '🔁 Retell it',
+  text_to_video: '🎥 Film it',
+};
+
+/** Host-only: choose what an adventure starts from. Choosing costs nothing; the first action does. */
+function AdventureStart({ onPick, onText, onFile, onClose, busy }: {
+  onPick: (artifactId: string, kind: ArtifactKind) => void;
+  onText: (text: string) => void;
+  onFile: (file: File) => void;
+  onClose: () => void;
+  busy: boolean;
+}) {
+  const [sources, setSources] = useState<SourceCandidate[] | null>(null);
+  const [text, setText] = useState('');
+  useEffect(() => {
+    let alive = true;
+    api.sources().then((r) => alive && setSources(r.sources), () => alive && setSources([]));
+    return () => { alive = false; };
+  }, []);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-[4vw]" onClick={onClose}>
+      <div className="flex max-h-full w-full max-w-5xl flex-col gap-4 overflow-hidden rounded-xl border border-neutral-700 bg-neutral-950 p-6" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-2xl font-semibold text-neutral-100">Start an adventure</h2>
+          <button type="button" className="pbtn" onClick={onClose}>Close</button>
+        </div>
+        <p className="text-sm text-neutral-400">Pick a starting image or sentence. Nothing is sent to a provider until you choose the first action.</p>
+        <div className="flex gap-2">
+          <input
+            autoFocus
+            value={text}
+            onChange={(e) => setText(e.target.value.slice(0, 2000))}
+            onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter' && text.trim()) onText(text.trim()); }}
+            placeholder="Type a starting sentence…"
+            className="min-w-0 flex-1 rounded border border-neutral-700 bg-neutral-900 px-3 py-2 text-base text-neutral-100 placeholder:text-neutral-600"
+          />
+          <button type="button" className="pbtn" disabled={busy || !text.trim()} onClick={() => onText(text.trim())}>Start from text</button>
+          <label className={cx('pbtn cursor-pointer', busy && 'pointer-events-none opacity-50')}>
+            Upload image…
+            <input type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) onFile(f); }} />
+          </label>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {!sources ? (
+            <p className="text-neutral-500">Loading earlier sources…</p>
+          ) : sources.length === 0 ? (
+            <p className="text-neutral-500">No earlier images or texts yet. Type a sentence or upload an image.</p>
+          ) : (
+            <div className="grid grid-cols-3 gap-3 md:grid-cols-4 lg:grid-cols-5">
+              {sources.map((c) => (
+                <button key={c.artifact.id} type="button" disabled={busy} title={c.label} onClick={() => onPick(c.artifact.id, c.artifact.kind)}
+                  className="flex flex-col gap-1 rounded-lg border border-neutral-800 bg-neutral-900 p-1.5 text-left hover:border-sky-500">
+                  {c.artifact.kind === 'image' ? (
+                    <img src={mediaUrl(c.artifact.id)} alt="" loading="lazy" className="aspect-video w-full rounded object-cover" />
+                  ) : (
+                    <div className="aspect-video w-full overflow-hidden rounded bg-neutral-950 p-2 text-[11px] leading-snug text-neutral-300">{c.artifact.text}</div>
+                  )}
+                  <span className="truncate text-[11px] text-neutral-400">{c.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Present({ token }: { token: string }) {
   const [state, setState] = useState<PresentState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -87,6 +159,20 @@ export default function Present({ token }: { token: string }) {
   const [pinned, setPinned] = useState(false);
   const [showControls, setShowControls] = useState(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [startOpen, setStartOpen] = useState(false);
+  const [twist, setTwist] = useState('');
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const [bottomH, setBottomH] = useState(0);
+
+  // The detail view must clear the bottom bars whatever their height (one row, two rows, wrapped).
+  useEffect(() => {
+    const el = bottomRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setBottomH(el.offsetHeight));
+    ro.observe(el);
+    setBottomH(el.offsetHeight);
+    return () => ro.disconnect();
+  });
 
   useEffect(() => {
     let alive = true;
@@ -180,6 +266,45 @@ export default function Present({ token }: { token: string }) {
     }
   }, [runId]);
 
+  const guarded = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    setActionError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setActionError(String((e as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** A fresh interactive run with no steps. Creating it is free; each chosen action is one provider call. */
+  const newAdventure = async (artifactId: string, kind: ArtifactKind) => {
+    await api.reveal({ action: 'auto', on: true }); // an adventure shows every result as it lands
+    const v = await api.createRun({
+      preset: { schemaVersion: PRESET_SCHEMA_VERSION, name: 'Adventure', startingKind: kind === 'text' ? 'text' : 'image', steps: [] },
+      sourceArtifactId: artifactId, interactive: true, select: true,
+    });
+    setRun(v);
+    setRunId(v.id);
+    setDetailStage(null);
+    setState(await api.presentState(token));
+    return v;
+  };
+  const beginFrom = (artifactId: string, kind: ArtifactKind) => guarded(async () => { await newAdventure(artifactId, kind); setStartOpen(false); });
+  const beginFromText = (text: string) => guarded(async () => {
+    const ses = await api.sourceText(text);
+    if (ses.source) await newAdventure(ses.source.id, 'text');
+    setStartOpen(false);
+  });
+  const beginFromFile = (file: File) => guarded(async () => {
+    const r = await api.desktopUpload(file);
+    const up = r.session.uploads.find((u) => u.id === r.uploadId);
+    if (up) await newAdventure(up.artifact.id, 'image');
+    setStartOpen(false);
+  });
+  const startChooser = startOpen && isHost ? <AdventureStart busy={busy} onPick={beginFrom} onText={beginFromText} onFile={beginFromFile} onClose={() => setStartOpen(false)} /> : null;
+
   // When the host moves the stage, the projector follows again.
   useEffect(() => setDetailStage(null), [state?.currentStage, state?.compare]);
 
@@ -187,6 +312,8 @@ export default function Present({ token }: { token: string }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!state?.hasRun) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
       if (e.key === 'Escape') return setDetailStage(null);
       if (e.key === 'c' && isHost) return setPinned((p) => !p);
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
@@ -230,6 +357,13 @@ export default function Present({ token }: { token: string }) {
         <p className="mt-[2vh] text-neutral-500" style={{ fontSize: 'clamp(14px, 1.6vw, 28px)' }}>
           Waiting for the host…
         </p>
+        {isHost && (
+          <button type="button" className="pbtn mt-[4vh]" style={{ fontSize: 'clamp(12px, 1.2vw, 22px)' }} onClick={() => setStartOpen(true)}>
+            ✨ Start an adventure
+          </button>
+        )}
+        {actionError && <p className="mt-3 text-sm text-red-300">{actionError}</p>}
+        {startChooser}
       </div>
     );
 
@@ -246,6 +380,20 @@ export default function Present({ token }: { token: string }) {
     current.stage === 0
       ? `Starting ${current.kind === 'text' ? 'text' : 'image'}`
       : `Step ${current.stage} of ${total} — ${current.label}`;
+
+  // Adventure: the chosen action applies to what is ON SCREEN. At the tip of an interactive run it extends
+  // that run; anywhere else (an earlier step, or a preset run) it branches into a new adventure from there.
+  const onScreen = state.compare ? null : (detail ?? (current?.revealed && current.artifact ? current : null));
+  const runIdle = !!run && ['ready', 'paused', 'completed'].includes(run.status) && run.currentStepIndex >= run.steps.length;
+  const atTip = !!run?.interactive && !!onScreen && onScreen.stage === stages.length - 1 && runIdle;
+  const actions = onScreen ? NEXT_ACTIONS[onScreen.kind] : [];
+  const choose = (type: StepType) => guarded(async () => {
+    if (!onScreen?.artifact) return;
+    const target = atTip && run ? run.id : (await newAdventure(onScreen.artifact.id, onScreen.kind)).id;
+    setRun(await api.appendStep(target, type, twist.trim() || undefined));
+    setTwist('');
+    setDetailStage(null);
+  });
 
   const elapsedOf = (s: PresentStage) => (s.startedAt ? Math.max(0, Math.floor((Date.now() - offset - s.startedAt) / 1000)) : 0);
 
@@ -306,12 +454,13 @@ export default function Present({ token }: { token: string }) {
         )}
       </div>
 
+      <div ref={bottomRef} className="relative z-30">
       {/* host-only controls: present only when this browser holds the host cookie */}
       {isHost && (
         <div
           className={cx(
             'relative z-30 bg-[#0a0a0a]/95 px-[2vw] transition-opacity duration-300',
-            showControls || pinned || busy ? 'opacity-100' : 'pointer-events-none opacity-0',
+            showControls || pinned || busy || run?.interactive ? 'opacity-100' : 'pointer-events-none opacity-0',
           )}
           onMouseEnter={() => setShowControls(true)}
         >
@@ -361,11 +510,35 @@ export default function Present({ token }: { token: string }) {
           {run?.statusReason && (
             <div className="truncate pb-[0.8vh] text-amber-300" style={{ fontSize: 'clamp(9px, 0.8vw, 14px)' }}>{run.statusReason}</div>
           )}
+          {/* adventure: pick the next action for whatever is on screen, as many times as you like */}
+          <div className="flex flex-wrap items-center gap-[0.5vw] pb-[0.8vh]" style={{ fontSize: 'clamp(9px, 0.85vw, 15px)' }}>
+            <span className="tracking-widest text-neutral-500 uppercase">Adventure</span>
+            <button type="button" className="pbtn" disabled={busy} onClick={() => setStartOpen(true)}>✨ New…</button>
+            {onScreen && actions.length > 0 && (
+              <>
+                <span className="ml-[1vw] text-neutral-500">next:</span>
+                {actions.map((t) => (
+                  <button key={t} type="button" className="pbtn pbtn-go" disabled={busy || run?.status === 'running'} onClick={() => void choose(t)}>
+                    {ACTION_LABEL[t]}
+                  </button>
+                ))}
+                <input
+                  value={twist}
+                  onChange={(e) => setTwist(e.target.value.slice(0, 500))}
+                  placeholder="optional twist, e.g. as a watercolour"
+                  className="min-w-[14vw] flex-1 rounded border border-neutral-700 bg-neutral-900 px-[0.6vw] py-[0.45vh] text-neutral-100 placeholder:text-neutral-600"
+                />
+                {!atTip && <span className="text-sky-300">starts a new branch from this step</span>}
+              </>
+            )}
+            {onScreen?.kind === 'video' && <span className="ml-[1vw] text-neutral-400">A video ends this path. Open an earlier step below to branch from it.</span>}
+            {run?.status === 'running' && <span className="ml-[1vw] animate-pulse text-sky-300">working…</span>}
+          </div>
         </div>
       )}
 
       {/* step bar: always visible, above the detail view, for flipping through revealed steps */}
-      <div className="relative z-30 flex items-stretch gap-[0.5vw] bg-[#0a0a0a] px-[2vw] pt-[0.8vh] pb-[1.6vh]">
+      <div className="relative z-30 flex items-stretch gap-[0.5vw] overflow-x-auto bg-[#0a0a0a] px-[2vw] pt-[0.8vh] pb-[1.6vh]">
         {stages.map((s) => {
           const isHostStage = s.stage === state.currentStage && !state.compare;
           const isViewing = detail ? detail.stage === s.stage : isHostStage;
@@ -381,9 +554,11 @@ export default function Present({ token }: { token: string }) {
               key={s.stage}
               type="button"
               disabled={!s.revealed}
+              // long adventures scroll sideways: keep the step being shown in view
+              ref={isViewing ? (el) => el?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) : undefined}
               onClick={() => setDetailStage(detail?.stage === s.stage ? null : s.stage)}
               title={s.revealed ? `${s.label} — view with its exact instruction (←/→ to flip, Esc to return)` : 'not revealed yet'}
-              className={cx('min-w-0 flex-1 truncate rounded px-[0.4vw] py-[0.6vh] text-center transition-colors', tone, isViewing && 'ring-2 ring-sky-400', s.revealed && 'cursor-pointer')}
+              className={cx('min-w-[7vw] flex-1 truncate rounded px-[0.4vw] py-[0.6vh] text-center transition-colors', tone, isViewing && 'ring-2 ring-sky-400', s.revealed && 'cursor-pointer')}
               style={{ fontSize: 'clamp(9px, 0.85vw, 16px)' }}
             >
               {s.stage === 0 ? 'Start' : `${s.stage} · ${s.label}`}
@@ -391,12 +566,15 @@ export default function Present({ token }: { token: string }) {
           );
         })}
       </div>
+      </div>
+
+      {startChooser}
 
       {/* viewer-local detail overlay: only ever shows a revealed stage */}
       {detail && detail.artifact && (
         <div
           className="absolute inset-x-0 top-0 z-20 flex flex-col bg-[#050505] px-[3vw] pt-[3vh] pb-[1vh]"
-          style={{ bottom: isHost ? '10.5vh' : '6.5vh' }} // clears the step bar, plus the control bar when present
+          style={{ bottom: bottomH }} // measured: clears the step bar and any control rows
           onClick={() => setDetailStage(null)}
         >
           <div className="mb-[1.5vh] flex items-baseline gap-[1.5vw]">

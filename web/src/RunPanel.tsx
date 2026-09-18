@@ -61,6 +61,7 @@ function StepRow({ step, now, onNewRun, busy }: { step: StepView; now: number; o
         <Pill tone={statusTone(step.status)}>{step.status}</Pill>
         <span className="text-neutral-300">{t?.label ?? step.definition.type}</span>
         <span className="font-mono text-[11px] text-neutral-500">{step.definition.modelId}</span>
+        {step.definition.auto && <Pill tone="accent">auto-added bridge</Pill>}
         {elapsed != null && <span className="text-neutral-400">{fmtDuration(elapsed)}</span>}
         {step.artifact && (
           <button type="button" className="btn btn-xs ml-auto" disabled={busy} onClick={() => onNewRun(step.artifact!.id)}>

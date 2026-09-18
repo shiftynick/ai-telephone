@@ -3,6 +3,7 @@ import {
   DEFAULT_INSTRUCTIONS,
   PRESET_SCHEMA_VERSION,
   STEP_TYPES,
+  bridgeType,
   type ArtifactKind,
   type ModelsView,
   type Preset,
@@ -350,9 +351,11 @@ export default function PipelineEditor({
             <option value="image">image</option>
             <option value="text">text</option>
           </select>
-          {sourceKind && sourceKind !== editor.startingKind && (
-            <p className="mt-1 max-w-40 text-[11px] text-amber-400">
-              The accepted source is {sourceKind}. Switch this to {sourceKind}, or accept a different source.
+          {sourceKind && editor.steps[0] && sourceKind !== STEP_TYPES[editor.steps[0].type].input && (
+            <p className="mt-1 max-w-44 text-[11px] text-sky-300">
+              {bridgeType(sourceKind, STEP_TYPES[editor.steps[0].type].input)
+                ? `The accepted source is ${sourceKind}, so a visible “${STEP_TYPES[bridgeType(sourceKind, STEP_TYPES[editor.steps[0].type].input)!].label}” step is added automatically at the start of the run.`
+                : `The accepted source is ${sourceKind}; this pipeline cannot start from it.`}
             </p>
           )}
         </div>

@@ -65,6 +65,9 @@ CREATE TABLE IF NOT EXISTS model_tests (
 export function openDb(file: string): DB {
   const db = new DatabaseSync(file);
   db.exec(SCHEMA);
+  // Additive migrations for databases created by earlier builds.
+  const cols = (db.prepare('PRAGMA table_info(runs)').all() as any[]).map((c) => c.name);
+  if (!cols.includes('interactive')) db.exec('ALTER TABLE runs ADD COLUMN interactive INTEGER NOT NULL DEFAULT 0');
   return db;
 }
 

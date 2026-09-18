@@ -7,6 +7,7 @@ import type {
   RunStatus,
   RunView,
   StepIssue,
+  StepType,
 } from '../../shared/types.ts';
 
 // ---- view models that only exist on the wire (documented in docs/API.md) ----
@@ -167,8 +168,9 @@ export const api = {
   // runs
   runs: () => request<{ runs: RunListItem[] }>('/api/runs'),
   run: (id: string) => request<RunView>(`/api/runs/${id}`),
-  createRun: (body: { preset: PresetBody; sourceArtifactId?: string; budgetUsd?: number | null; select?: boolean }) =>
+  createRun: (body: { preset: PresetBody; sourceArtifactId?: string; budgetUsd?: number | null; select?: boolean; interactive?: boolean; autoBridge?: boolean }) =>
     json<RunView>('/api/runs', 'POST', body),
+  appendStep: (id: string, type: StepType, twist?: string) => json<RunView>(`/api/runs/${id}/steps`, 'POST', { type, ...(twist ? { twist } : {}) }),
   runAction: (id: string, action: RunAction, acknowledgeBilling = false) =>
     json<RunView>(`/api/runs/${id}/actions`, 'POST', { action, acknowledgeBilling }),
 

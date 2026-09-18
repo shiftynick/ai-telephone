@@ -139,6 +139,7 @@ export class Sessions {
 
   reveal(action: { action: 'show'; stage: number } | { action: 'next' } | { action: 'prev' } | { action: 'final' } | { action: 'compare'; on: boolean } | { action: 'auto'; on: boolean } | { action: 'reset' }) {
     const s = this.current();
+    if (action.action === 'auto') return this.save(s.id, { auto: action.on });
     if (!s.selected_run_id) return;
     const revealed: number[] = JSON.parse(s.revealed);
     const max = this.available(s.selected_run_id);
@@ -155,7 +156,6 @@ export class Sessions {
         // comparing shows source and final side by side, so both become revealed
         return this.save(s.id, { compare: action.on, revealed: action.on ? [...revealed, 0, max] : revealed });
       }
-      case 'auto': return this.save(s.id, { auto: action.on });
       case 'reset': return this.save(s.id, { revealed: [], current: 0, compare: false });
     }
   }

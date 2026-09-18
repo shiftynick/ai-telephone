@@ -43,6 +43,8 @@ export const StepDefinition = z.object({
   modelId: z.string().min(1).max(200),
   instruction: z.string().max(8000),
   params: StepParams.default({}),
+  /** True when the app added this step itself (a bridge between the source and the pipeline). Always visible, never hidden. */
+  auto: z.boolean().optional(),
 });
 export type StepDefinition = z.infer<typeof StepDefinition>;
 
@@ -78,6 +80,20 @@ export function validateChain(startingKind: ArtifactKind, steps: { type: StepTyp
   });
   return issues;
 }
+
+/** The single step that turns one artifact kind into another, if there is one. */
+export function bridgeType(from: ArtifactKind, to: ArtifactKind): StepType | null {
+  if (from === 'image' && to === 'text') return 'image_to_text';
+  if (from === 'text' && to === 'image') return 'text_to_image';
+  return null;
+}
+
+/** What can be done next with an artifact of each kind (interactive "adventure" mode). Nothing accepts video. */
+export const NEXT_ACTIONS: Record<ArtifactKind, StepType[]> = {
+  image: ['image_to_text', 'image_to_video'],
+  text: ['text_to_image', 'text_to_text', 'text_to_video'],
+  video: [],
+};
 
 export const DEFAULT_INSTRUCTIONS: Record<StepType, string> = {
   image_to_text:
@@ -150,6 +166,7 @@ export type RunView = {
   startedAt?: number;
   finishedAt?: number;
   imported?: boolean;
+  interactive?: boolean;
 };
 
 export type ModelEntry = {

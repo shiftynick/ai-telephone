@@ -80,3 +80,5 @@ body {
 .pbtn:disabled { @apply cursor-not-allowed border-neutral-800 text-neutral-600; }
 .pbtn-on { @apply border-sky-500 bg-sky-950 text-sky-200; }
 .pbtn-danger:not(:disabled) { @apply border-red-800 text-red-300; }
+.pbtn-go:not(:disabled) { @apply border-sky-700 bg-sky-950 text-sky-100; }
+.pbtn-go:hover:not(:disabled) { @apply border-sky-400 bg-sky-900; }
