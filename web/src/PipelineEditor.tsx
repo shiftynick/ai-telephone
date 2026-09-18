@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import {
   DEFAULT_INSTRUCTIONS,
+  INSTRUCTION_SETS,
   PRESET_SCHEMA_VERSION,
   STEP_TYPES,
   bridgeType,
@@ -375,6 +376,24 @@ export default function PipelineEditor({
           Delete
         </button>
         <span className="w-2" />
+        <select
+          className="inp w-auto py-0.5 text-xs"
+          value=""
+          title="Overwrite the instruction on every step card with this set (edits the pipeline; use the Run panel's selector to leave it untouched)."
+          onChange={(e) => {
+            const set = INSTRUCTION_SETS.find((x) => x.id === e.target.value);
+            if (!set) return;
+            if (window.confirm(`Replace the instruction on all ${editor.steps.length} step cards with the "${set.name}" set?`))
+              setSteps(editor.steps.map((st) => ({ ...st, instruction: set.instructions[st.type] })));
+          }}
+        >
+          <option value="">Fill cards from instruction set…</option>
+          {INSTRUCTION_SETS.map((x) => (
+            <option key={x.id} value={x.id}>
+              {x.name}
+            </option>
+          ))}
+        </select>
         <button type="button" className="btn btn-xs" onClick={exportJson}>
           Export JSON
         </button>

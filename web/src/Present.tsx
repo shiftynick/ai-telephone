@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { NEXT_ACTIONS, PRESET_SCHEMA_VERSION, type ArtifactKind, type ArtifactView, type PresentStage, type PresentState, type RunView, type StepType } from '../../shared/types.ts';
+import { INSTRUCTION_SETS, NEXT_ACTIONS, PRESET_SCHEMA_VERSION, type ArtifactKind, type ArtifactView, type PresentStage, type PresentState, type RunView, type StepType } from '../../shared/types.ts';
 import { ALLOWED_ACTIONS, ApiError, api, mediaUrl, type RevealAction, type RunAction, type SourceCandidate } from './api.ts';
 import { cx, fmtDuration, fmtMoney } from './util.tsx';
 
@@ -161,6 +161,7 @@ export default function Present({ token }: { token: string }) {
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [startOpen, setStartOpen] = useState(false);
   const [twist, setTwist] = useState('');
+  const [advSet, setAdvSet] = useState('faithful');
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const [bottomH, setBottomH] = useState(0);
 
@@ -390,7 +391,7 @@ export default function Present({ token }: { token: string }) {
   const choose = (type: StepType) => guarded(async () => {
     if (!onScreen?.artifact) return;
     const target = atTip && run ? run.id : (await newAdventure(onScreen.artifact.id, onScreen.kind)).id;
-    setRun(await api.appendStep(target, type, twist.trim() || undefined));
+    setRun(await api.appendStep(target, type, twist.trim() || undefined, advSet));
     setTwist('');
     setDetailStage(null);
   });
@@ -522,6 +523,16 @@ export default function Present({ token }: { token: string }) {
                     {ACTION_LABEL[t]}
                   </button>
                 ))}
+                <select
+                  value={advSet}
+                  onChange={(e) => setAdvSet(e.target.value)}
+                  title="Instruction set used for the next action"
+                  className="rounded border border-neutral-700 bg-neutral-900 px-[0.4vw] py-[0.45vh] text-neutral-100"
+                >
+                  {INSTRUCTION_SETS.map((x) => (
+                    <option key={x.id} value={x.id}>{x.name}</option>
+                  ))}
+                </select>
                 <input
                   value={twist}
                   onChange={(e) => setTwist(e.target.value.slice(0, 500))}

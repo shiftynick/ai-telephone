@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { ArtifactView, AttemptView, RunView, StepView } from '../../shared/types.ts';
-import { STEP_TYPES } from '../../shared/types.ts';
+import { INSTRUCTION_SETS, STEP_TYPES, instructionSet } from '../../shared/types.ts';
 import { ALLOWED_ACTIONS as ALLOWED, ApiError, api, mediaUrl, type RunAction, type RunListItem } from './api.ts';
 import { Banner, Pill, Section, cx, fmtBytes, fmtDuration, fmtMoney, fmtTime, useNow } from './util.tsx';
 
@@ -104,6 +104,8 @@ export default function RunPanel({
   selectedRunId,
   replay,
   budget,
+  instructionSetId,
+  setInstructionSetId,
   setBudget,
   canCreate,
   createDisabledReason,
@@ -117,6 +119,8 @@ export default function RunPanel({
   selectedRunId: string | null;
   replay: boolean;
   budget: string;
+  instructionSetId: string;
+  setInstructionSetId: (id: string) => void;
   setBudget: (v: string) => void;
   canCreate: boolean;
   createDisabledReason: string | null;
@@ -162,7 +166,21 @@ export default function RunPanel({
     <Section
       title="Run"
       right={
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <label className="lbl">Instructions</label>
+          <select
+            className="inp w-52 py-1"
+            value={instructionSetId}
+            onChange={(e) => setInstructionSetId(e.target.value)}
+            title="Run the same pipeline under a different instruction set. Only this run changes; the pipeline above is not edited."
+          >
+            <option value="">as written in the pipeline</option>
+            {INSTRUCTION_SETS.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
           <label className="lbl">Budget $</label>
           <input
             className="inp w-24 py-1"
@@ -178,6 +196,12 @@ export default function RunPanel({
       }
     >
       {createDisabledReason && <Banner kind="warn">{createDisabledReason}</Banner>}
+      {instructionSet(instructionSetId) && (
+        <Banner kind={instructionSet(instructionSetId)!.experiment ? 'warn' : 'info'}>
+          Next run uses the <b>{instructionSet(instructionSetId)!.name}</b> instructions for every step, replacing the text on the step cards for
+          that run only. {instructionSet(instructionSetId)!.description}
+        </Banner>
+      )}
       <p className="text-[11px] text-neutral-500">
         A run takes an immutable snapshot of the pipeline above. Editing steps afterwards only affects the next run you create.
       </p>

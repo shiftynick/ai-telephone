@@ -56,6 +56,8 @@ export default function Host() {
   const [importIssues, setImportIssues] = useState<StepIssue[] | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [budget, setBudget] = useState('');
+  // '' = run the pipeline exactly as written; otherwise swap every step's instruction for this run only.
+  const [runInstructionSet, setRunInstructionSet] = useState('');
 
   const openRunRef = useRef<string | null>(null);
   openRunRef.current = openRunId;
@@ -291,7 +293,7 @@ export default function Host() {
       return;
     }
     try {
-      const v = await api.createRun({ preset: editor, sourceArtifactId, budgetUsd: budgetValue, select: true });
+      const v = await api.createRun({ preset: editor, sourceArtifactId, budgetUsd: budgetValue, select: true, instructionSet: runInstructionSet || undefined });
       setOpenRunId(v.id);
       setRun(v);
       await refreshAll();
@@ -391,6 +393,8 @@ export default function Host() {
             replay={!!session?.replay}
             budget={budget}
             setBudget={setBudget}
+            instructionSetId={runInstructionSet}
+            setInstructionSetId={setRunInstructionSet}
             canCreate={!createDisabledReason}
             createDisabledReason={createDisabledReason}
             onCreateRun={(id) => void createRun(id)}

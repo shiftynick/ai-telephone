@@ -168,9 +168,10 @@ export const api = {
   // runs
   runs: () => request<{ runs: RunListItem[] }>('/api/runs'),
   run: (id: string) => request<RunView>(`/api/runs/${id}`),
-  createRun: (body: { preset: PresetBody; sourceArtifactId?: string; budgetUsd?: number | null; select?: boolean; interactive?: boolean; autoBridge?: boolean }) =>
+  createRun: (body: { preset: PresetBody; sourceArtifactId?: string; budgetUsd?: number | null; select?: boolean; interactive?: boolean; autoBridge?: boolean; instructionSet?: string }) =>
     json<RunView>('/api/runs', 'POST', body),
-  appendStep: (id: string, type: StepType, twist?: string) => json<RunView>(`/api/runs/${id}/steps`, 'POST', { type, ...(twist ? { twist } : {}) }),
+  appendStep: (id: string, type: StepType, twist?: string, instructionSet?: string) =>
+    json<RunView>(`/api/runs/${id}/steps`, 'POST', { type, ...(twist ? { twist } : {}), ...(instructionSet ? { instructionSet } : {}) }),
   runAction: (id: string, action: RunAction, acknowledgeBilling = false) =>
     json<RunView>(`/api/runs/${id}/actions`, 'POST', { action, acknowledgeBilling }),
 

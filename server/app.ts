@@ -18,7 +18,7 @@ import { OpenRouterAdapter } from './providers/openrouter.ts';
 import { FalAdapter } from './providers/fal.ts';
 import { MockAdapter } from './providers/mock.ts';
 import type { Adapters } from './providers/types.ts';
-import { PresetBody, STEP_TYPES, StepDefinition, StepType, bridgeType, validateChain, type StepIssue } from '../shared/types.ts';
+import { PresetBody, STEP_TYPES, StepDefinition, StepType, bridgeType, instructionSet, validateChain, type StepIssue } from '../shared/types.ts';
 
 const HOST_COOKIE = 'tele_host';
 const HOST_SESSION_MS = 12 * 3600_000;
@@ -257,8 +257,10 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
   app.post('/api/runs', { preHandler: requireHost }, async (req, reply) => {
     const b = z.object({
       preset: PresetBody, sourceArtifactId: z.string().optional(), budgetUsd: z.number().positive().nullable().optional(), select: z.boolean().default(true),
-      autoBridge: z.boolean().default(true), interactive: z.boolean().default(false),
+      autoBridge: z.boolean().default(true), interactive: z.boolean().default(false), instructionSet: z.string().max(40).optional(),
     }).parse(req.body);
+    const iset = b.instructionSet ? instructionSet(b.instructionSet) : null;
+    if (b.instructionSet && !iset) return reply.code(400).send({ error: `Unknown instruction set "${b.instructionSet}".` });
     const sourceId = b.sourceArtifactId ?? sessions.current().source_artifact_id;
     if (!sourceId) return reply.code(400).send({ error: 'Accept a source image (or enter starting text) first.' });
     const src = store.get(sourceId);
@@ -272,9 +274,12 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
       const bt = src.kind !== need ? bridgeType(src.kind as any, need) : null;
       if (bt) { steps = [defaultStep(bt, { auto: true }), ...steps]; bridged = true; }
     }
+    // Same pipeline, different words: swap ONLY the static instruction of every step (bridge included).
+    // The saved preset is untouched; the run's snapshot records exactly what was sent.
+    if (iset) steps = steps.map((st) => ({ ...st, instruction: iset.instructions[st.type] }));
     const issues = chainIssues({ startingKind: src.kind as any, steps });
     if (issues.length) return reply.code(400).send({ error: `Step ${issues[0].index + 1 - Number(bridged)}: ${issues[0].message}`, issues });
-    const id = runner.createRun({ preset: { ...b.preset, steps }, sourceArtifactId: sourceId, budgetUsd: b.budgetUsd === undefined ? cfg.defaultBudgetUsd : b.budgetUsd, interactive: b.interactive });
+    const id = runner.createRun({ preset: { ...b.preset, steps }, name: iset && iset.id !== 'faithful' ? `${b.preset.name} [${iset.name}]` : undefined, sourceArtifactId: sourceId, budgetUsd: b.budgetUsd === undefined ? cfg.defaultBudgetUsd : b.budgetUsd, interactive: b.interactive });
     if (b.select) sessions.selectRun(id, false);
     return runner.view(id);
   });
@@ -282,8 +287,10 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
   // tested model for the type; an optional twist is appended to the static instruction.
   app.post('/api/runs/:id/steps', { preHandler: requireHost }, async (req, reply) => {
     const id = (req.params as any).id;
-    const b = z.object({ type: StepType, twist: z.string().trim().max(500).optional(), modelId: z.string().min(1).max(200).optional() }).parse(req.body);
-    const def = defaultStep(b.type, b.modelId ? { modelId: b.modelId } : {});
+    const b = z.object({ type: StepType, twist: z.string().trim().max(500).optional(), modelId: z.string().min(1).max(200).optional(), instructionSet: z.string().max(40).optional() }).parse(req.body);
+    const iset = b.instructionSet ? instructionSet(b.instructionSet) : null;
+    if (b.instructionSet && !iset) return reply.code(400).send({ error: `Unknown instruction set "${b.instructionSet}".` });
+    const def = defaultStep(b.type, { ...(b.modelId ? { modelId: b.modelId } : {}), ...(iset ? { instruction: iset.instructions[b.type] } : {}) });
     if (b.twist) def.instruction = [def.instruction, `Additional direction: ${b.twist}`].filter(Boolean).join('\n\n');
     const problem = catalog.validateStep(def);
     if (problem) return reply.code(400).send({ error: problem });
