@@ -215,6 +215,17 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
     return { ok: true, width: r.width, height: r.height };
   });
 
+  // The phone may also send starting TEXT. Like a photo, it only becomes a source once the host accepts it.
+  app.post('/api/sessions/:id/text', async (req, reply) => {
+    const s = sessions.byToken('upload', String(req.headers['x-upload-token'] ?? ''));
+    if (!s || s.id !== (req.params as any).id) return reply.code(401).send({ error: 'Invalid or expired upload token.' });
+    if (sessions.uploadCount(s.id) >= cfg.maxUploadsPerSession) return reply.code(429).send({ error: 'Upload limit for this session reached.' });
+    const { text } = z.object({ text: z.string().trim().min(1).max(2000) }).parse(req.body);
+    const art = store.saveText(text, null);
+    sessions.addUpload(s.id, art.id, 'phone-text', []);
+    return { ok: true };
+  });
+
   // ---- LAN -----------------------------------------------------------
 
   app.get('/api/lan', { preHandler: requireHost }, async () => ({

@@ -16,7 +16,7 @@ Host routes need the `tele_host` HttpOnly cookie (obtained via `/api/auth/exchan
 
 ## Host: session / source / reveal
 - `GET /api/session` → SessionView:
-  `{id, uploadToken, projectorToken, expiresAt, source: ArtifactView|null, uploads: {id, origin:'phone'|'desktop'|'text', status:'pending'|'accepted'|'rejected', createdAt, transformations:string[], artifact:ArtifactView}[], selectedRunId:string|null, replay:boolean, autoReveal:boolean, revealed:number[], currentStage:number, compare:boolean}`
+  `{id, uploadToken, projectorToken, expiresAt, source: ArtifactView|null, uploads: {id, origin:'phone'|'phone-text'|'desktop'|'text', status:'pending'|'accepted'|'rejected', createdAt, transformations:string[], artifact:ArtifactView}[], selectedRunId:string|null, replay:boolean, autoReveal:boolean, revealed:number[], currentStage:number, compare:boolean}`
 - `POST /api/session/rotate {which:'upload'|'projector'|'both'}` → SessionView (revokes old tokens)
 - `POST /api/session/uploads` multipart field `file` (desktop upload) → `{uploadId, width, height, transformations, session}`; still needs Accept.
 - `POST /api/session/source-text {text}` → SessionView (text source, auto-accepted)
@@ -39,6 +39,7 @@ Host routes need the `tele_host` HttpOnly cookie (obtained via `/api/auth/exchan
 ## Phone (upload token only)
 - `GET /api/join/:token` → `{ok, sessionId, maxBytes}` or 404
 - `POST /api/sessions/:sessionId/uploads` multipart `file`, header `x-upload-token` → `{ok,width,height}`; 413 too large, 415 not an image / HEIC undecodable (message is user-presentable), 429 upload limit.
+- `POST /api/sessions/:sessionId/text {text}` (1–2000 chars, trimmed), header `x-upload-token` → `{ok:true}`. Creates a *pending* text upload with `origin:'phone-text'`; like a photo it becomes the source only when the host accepts it. 400 empty/oversized, 429 upload limit.
 
 ## Projector (projector token only, read-only)
 - `GET /api/present/:token/state` → `PresentState` (unrevealed stages have no artifact/instruction)

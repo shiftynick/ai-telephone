@@ -11,6 +11,8 @@ export default function Join({ token }: { token: string }) {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
+  const [text, setText] = useState('');
+  const [sentKind, setSentKind] = useState<'photo' | 'text'>('photo');
   const cameraRef = useRef<HTMLInputElement | null>(null);
   const libraryRef = useRef<HTMLInputElement | null>(null);
   const abortRef = useRef<(() => void) | null>(null);
@@ -65,6 +67,7 @@ export default function Join({ token }: { token: string }) {
     abortRef.current = abort;
     try {
       await promise;
+      setSentKind('photo');
       setPhase('done');
     } catch (e) {
       setError(String((e as Error).message));
@@ -74,8 +77,24 @@ export default function Join({ token }: { token: string }) {
     }
   };
 
+  const sendText = async () => {
+    const body = text.trim();
+    if (!body) return;
+    setError(null);
+    setPhase('uploading');
+    try {
+      await api.joinText(sessionId, token, body);
+      setSentKind('text');
+      setPhase('done');
+    } catch (e) {
+      setError(String((e as Error).message));
+      setPhase('pick');
+    }
+  };
+
   const reset = () => {
     setFile(null);
+    setText('');
     setProgress(0);
     setError(null);
     setPhase('pick');
@@ -83,7 +102,7 @@ export default function Join({ token }: { token: string }) {
 
   return (
     <div className="mx-auto flex min-h-full max-w-md flex-col gap-4 p-4">
-      <h1 className="text-xl font-semibold text-neutral-100">AI Telephone — send a photo</h1>
+      <h1 className="text-xl font-semibold text-neutral-100">AI Telephone — send a photo or a sentence</h1>
 
       {phase === 'checking' && <p className="text-neutral-400">Checking this link…</p>}
 
@@ -110,8 +129,31 @@ export default function Join({ token }: { token: string }) {
               >
                 🖼 Choose from library
               </button>
+
+              {/* A sentence can start the chain instead of a photo: the first step then generates an image from it. */}
+              <div className="flex items-center gap-3 pt-1 text-xs tracking-widest text-neutral-500 uppercase">
+                <span className="h-px flex-1 bg-neutral-800" /> or send a sentence <span className="h-px flex-1 bg-neutral-800" />
+              </div>
+              <textarea
+                value={text}
+                onChange={(e) => setText(e.target.value.slice(0, 2000))}
+                rows={4}
+                placeholder="Describe a scene to start from, e.g. a red bicycle leaning on a lighthouse at sunset"
+                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 p-3 text-base text-neutral-100 placeholder:text-neutral-600"
+              />
+              <button
+                type="button"
+                className="rounded-xl bg-sky-600 px-4 py-4 text-base font-semibold text-white active:bg-sky-700 disabled:bg-neutral-800 disabled:text-neutral-500"
+                disabled={!text.trim()}
+                onClick={() => void sendText()}
+              >
+                Send this sentence
+              </button>
+              <p className="text-xs text-neutral-500">{text.trim().length}/2000 characters</p>
             </div>
           )}
+
+          {phase === 'uploading' && !preview && <p className="text-center text-sm text-neutral-400">Sending…</p>}
 
           <input
             ref={cameraRef}
@@ -166,7 +208,9 @@ export default function Join({ token }: { token: string }) {
         <div className="space-y-4">
           <div className="rounded-xl border border-emerald-800 bg-emerald-950/60 p-5 text-center">
             <div className="text-2xl">✓</div>
-            <p className="mt-1 text-lg font-semibold text-emerald-100">Sent! The host will review it.</p>
+            <p className="mt-1 text-lg font-semibold text-emerald-100">
+              {sentKind === 'text' ? 'Sentence sent!' : 'Sent!'} The host will review it.
+            </p>
           </div>
           <button type="button" className="w-full rounded-xl border border-neutral-700 bg-neutral-800 px-4 py-4 text-base text-neutral-100" onClick={reset}>
             Send another
@@ -176,11 +220,11 @@ export default function Join({ token }: { token: string }) {
 
       <div className="mt-auto space-y-2 rounded-lg border border-neutral-800 bg-neutral-900/60 p-3 text-xs leading-relaxed text-neutral-400">
         <p>
-          If the host accepts your photo, it is sent to external AI providers (OpenRouter and fal.ai) to be described and re-generated. It is not kept
-          private to this laptop.
+          If the host accepts what you send, it goes to external AI providers (OpenRouter and fal.ai) to be described, re-generated or animated. It is
+          not kept private to this laptop.
         </p>
         <p>Please photograph objects or a tabletop scene — or get permission from anyone who is visible.</p>
-        <p>This link goes over the local Wi-Fi without encryption. Only send photos you are happy to share with the room.</p>
+        <p>This link goes over the local network without encryption. Only send photos or words you are happy to share with the room.</p>
       </div>
     </div>
   );

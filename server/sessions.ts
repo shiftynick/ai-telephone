@@ -46,7 +46,7 @@ export class Sessions {
     return (this.db.prepare('SELECT COUNT(*) AS c FROM uploads WHERE session_id = ?').get(sessionId) as any).c as number;
   }
 
-  addUpload(sessionId: string, artifactId: string, origin: 'phone' | 'desktop' | 'text', transformations: string[]) {
+  addUpload(sessionId: string, artifactId: string, origin: 'phone' | 'phone-text' | 'desktop' | 'text', transformations: string[]) {
     const id = newId('upl');
     this.db.prepare('INSERT INTO uploads(id, session_id, artifact_id, origin, transformations, created_at) VALUES(?,?,?,?,?,?)').run(id, sessionId, artifactId, origin, JSON.stringify(transformations), now());
     this.bus.publish(null, 'upload.received', { uploadId: id, origin });

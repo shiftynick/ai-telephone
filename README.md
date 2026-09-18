@@ -40,7 +40,8 @@ Other scripts: `npm run dev` (Vite + watch server, open the printed `localhost:5
 1. **Source panel → LAN sharing**: pick the address the phone can reach (the app does not guess between
    Wi-Fi/VPN/hotspot interfaces) and start sharing. The server listens on loopback only until you do this.
    A QR code for `http://<ip>:8787/join/<token>` appears.
-2. Phone scans the QR, takes/chooses a photo, uploads. **Uploading never starts a billable call.**
+2. Phone scans the QR, then either takes/chooses a photo **or types a starting sentence**. Both arrive as pending
+   uploads. **Sending never starts a billable call**, and the phone can never make itself the source.
 3. Host clicks **Accept as source**, picks a preset (or edits the pipeline), **Create run**, **Start**.
 4. Open the **projector link** in a second window on the projector display. With auto-reveal on (default) each
    result appears as it completes; switch to **Final-result-first** to hide everything, reveal the final
@@ -57,11 +58,25 @@ the photo manually and use desktop upload. If `ufw` is active: `sudo ufw allow 8
 
 - [ ] Phone on the same network/hotspot opens the QR link.
 - [ ] "Take photo" opens the camera; "Choose from library" opens the picker (iPhone Safari).
+- [ ] The "or send a sentence" box submits, and the host sees it as a pending `phone-text` upload.
 - [ ] A portrait photo arrives upright in the host console.
 - [ ] A HEIC original (AirDrop/Files, not camera capture) uploads or shows the "export as JPEG" message.
       iOS Safari normally converts camera/library picks to JPEG before upload. On this machine sharp cannot
       decode HEIC; the server falls back to FFmpeg, which handles most but not necessarily all HEIC files.
 - [ ] Projector window on the external display at its real resolution; video Play works with sound.
+
+## Built-in presets (read-only; use "Save as new" to customise)
+
+| Preset | Shape | Rough cost / time |
+|---|---|---|
+| Quick demo | describe → draw → describe → draw → animate (5 steps) | ~$0.07 + 1 video, ≈ 18 s |
+| Cross-model telephone | same shape, alternating Gemini / OpenAI models | ~$0.11 + 1 video |
+| Long game | 3 describe/draw pairs, then a video (7 steps) | ~$0.11 + 1 video |
+| **Very long game (20 steps, no video)** | 10 describe/draw pairs, **no video**, fastest tested model per step (`gemini-2.5-flash` + `gemini-3.1-flash-lite-image`) | ~$0.35, ≈ 1 min of provider time |
+| Caption bottleneck | ~20-word descriptions: an intentionally lossy experiment | ~$0.07 + 1 video |
+
+The Very long game fits inside the default $2 budget, but it is 10 image generations — start it before you
+talk, not during a pause. Drift is an observation, not a guaranteed outcome.
 
 ## The telephone invariant
 

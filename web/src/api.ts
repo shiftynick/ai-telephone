@@ -17,7 +17,7 @@ export type StatusView =
 
 export type UploadView = {
   id: string;
-  origin: 'phone' | 'desktop' | 'text';
+  origin: 'phone' | 'phone-text' | 'desktop' | 'text';
   status: 'pending' | 'accepted' | 'rejected';
   createdAt: number;
   transformations: string[];
@@ -166,6 +166,12 @@ export const api = {
   // phone / projector
   join: (token: string) => request<{ ok: true; sessionId: string; maxBytes: number }>(`/api/join/${encodeURIComponent(token)}`),
   presentState: (token: string) => request<PresentState>(`/api/present/${encodeURIComponent(token)}/state`),
+  joinText: (sessionId: string, token: string, text: string) =>
+    request<{ ok: true }>(`/api/sessions/${encodeURIComponent(sessionId)}/text`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-upload-token': token },
+      body: JSON.stringify({ text }),
+    }),
 };
 
 export const mediaUrl = (artifactId: string, projectorToken?: string) =>

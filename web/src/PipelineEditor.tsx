@@ -265,6 +265,7 @@ export default function PipelineEditor({
   onImport,
   importIssues,
   importError,
+  sourceKind,
 }: {
   editor: PresetBody;
   setEditor: (b: PresetBody) => void;
@@ -282,6 +283,7 @@ export default function PipelineEditor({
   onImport: (file: File) => void;
   importIssues: StepIssue[] | null;
   importError: string | null;
+  sourceKind: ArtifactKind | null;
 }) {
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -348,6 +350,11 @@ export default function PipelineEditor({
             <option value="image">image</option>
             <option value="text">text</option>
           </select>
+          {sourceKind && sourceKind !== editor.startingKind && (
+            <p className="mt-1 max-w-40 text-[11px] text-amber-400">
+              The accepted source is {sourceKind}. Switch this to {sourceKind}, or accept a different source.
+            </p>
+          )}
         </div>
       </div>
 

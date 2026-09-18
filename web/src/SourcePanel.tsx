@@ -193,7 +193,7 @@ export function SourcePanel({
               {u.artifact.kind === 'image' ? (
                 <img src={mediaUrl(u.artifact.id)} alt="upload" className="h-20 w-20 shrink-0 rounded object-cover" />
               ) : (
-                <div className="h-20 w-20 shrink-0 overflow-hidden rounded bg-neutral-950 p-1 text-[10px] text-neutral-300">{u.artifact.text}</div>
+                <div className="h-20 w-32 shrink-0 overflow-y-auto rounded bg-neutral-950 p-1 text-[10px] leading-snug text-neutral-300">{u.artifact.text}</div>
               )}
               <div className="min-w-0 flex-1 text-xs text-neutral-400">
                 <div className="flex flex-wrap items-center gap-1">

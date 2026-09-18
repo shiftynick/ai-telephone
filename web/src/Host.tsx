@@ -378,6 +378,7 @@ export default function Host() {
             onImport={(f) => void importPreset(f)}
             importIssues={importIssues}
             importError={importError}
+            sourceKind={session?.source?.kind ?? null}
           />
           <RunPanel
             run={run}
