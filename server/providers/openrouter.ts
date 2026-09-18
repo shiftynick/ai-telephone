@@ -5,6 +5,9 @@ const BASE = 'https://openrouter.ai/api/v1';
 
 const REFUSAL_RE = /^\s*(i['’]?m sorry|i am sorry|sorry,|i can(?:['’]t|not)|i(?:['’]m| am) (?:unable|not able)|i won['’]t)\b/i;
 
+/** A reported cost of exactly 0 (seen live for some image models) is not trustworthy: surface it as unknown, never as free. */
+const knownCost = (c: unknown): number | null => (typeof c === 'number' && c > 0 ? c : null);
+
 export type OpenRouterOpts = { apiKey: string; fetchImpl?: typeof fetch; chatTimeoutMs?: number; imageTimeoutMs?: number };
 
 export class OpenRouterAdapter implements StepAdapter {
@@ -86,7 +89,7 @@ export class OpenRouterAdapter implements StepAdapter {
     text = text.trim();
     const meta = {
       usage: json?.usage,
-      costUsd: typeof json?.usage?.cost === 'number' ? json.usage.cost : null,
+      costUsd: knownCost(json?.usage?.cost),
       providerModel: json?.model,
       providerName: json?.provider,
       providerRequestId: json?.id,
@@ -116,7 +119,7 @@ export class OpenRouterAdapter implements StepAdapter {
     const b64 = json?.data?.[0]?.b64_json;
     if (typeof b64 !== 'string' || b64.length < 100) throw new ProviderError('empty_output', 'Image API returned no image data.');
     const bytes = Buffer.from(b64, 'base64');
-    const cost = typeof json?.usage?.cost === 'number' ? json.usage.cost : null;
+    const cost = knownCost(json?.usage?.cost);
     return {
       output: { kind: 'image', bytes },
       usage: json?.usage,
