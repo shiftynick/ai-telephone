@@ -323,7 +323,7 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
 
   const webDir = path.join(cfg.rootDir, 'dist', 'web');
   if (fs.existsSync(path.join(webDir, 'index.html'))) {
-    await app.register(fstatic, { root: webDir, wildcard: false, index: false });
+    await app.register(fstatic, { root: webDir, index: false }); // wildcard lookup: rebuilt hashed assets are served without a restart
     const index = (_: FastifyRequest, reply: FastifyReply) => reply.header('Cache-Control', 'no-store').type('text/html').send(fs.readFileSync(path.join(webDir, 'index.html')));
     for (const p of ['/', '/host', '/join/:token', '/present/:token']) app.get(p, index);
   }
