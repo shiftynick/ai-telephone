@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
-import { api, mediaUrl, type LanView, type SessionView } from './api.ts';
-import { Banner, CopyText, Pill, Section, fmtTime } from './util.tsx';
+import { api, mediaUrl, type LanView, type SessionView, type SourceCandidate } from './api.ts';
+import { Banner, CopyText, Pill, Section, cx, fmtTime } from './util.tsx';
 
 function Qr({ value }: { value: string }) {
   const [src, setSrc] = useState<string | null>(null);
@@ -38,7 +38,20 @@ export function SourcePanel({
   const [manual, setManual] = useState('');
   const [busy, setBusy] = useState(false);
   const [text, setText] = useState('');
+  const [sources, setSources] = useState<SourceCandidate[] | null>(null);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
+
+  // Any earlier upload or run artifact can start the next run, not just the newest accepted one.
+  useEffect(() => {
+    if (!libraryOpen) return;
+    let alive = true;
+    api.sources().then(
+      (r) => alive && setSources(r.sources),
+      (e) => alive && onError(String((e as Error).message)),
+    );
+    return () => { alive = false; };
+  }, [libraryOpen, session?.source?.id, session?.uploads.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (lan?.active) setSelected(lan.active.address);
@@ -210,10 +223,10 @@ export function SourcePanel({
                 <button
                   type="button"
                   className="btn btn-xs btn-primary"
-                  disabled={busy || u.status === 'accepted'}
+                  disabled={busy || session?.source?.id === u.artifact.id}
                   onClick={() => guard(() => api.decideUpload(u.id, 'accept'))}
                 >
-                  Accept as source
+                  {session?.source?.id === u.artifact.id ? 'Current source' : u.status === 'accepted' ? 'Use again' : 'Accept as source'}
                 </button>
                 <button type="button" className="btn btn-xs" disabled={busy || u.status === 'rejected'} onClick={() => guard(() => api.decideUpload(u.id, 'reject'))}>
                   Reject
@@ -225,6 +238,55 @@ export function SourcePanel({
         <p className="mt-2 text-[11px] text-neutral-500">
           Accepting only marks the image as the next run’s source. Nothing is sent to OpenRouter or fal until you create and start a run.
         </p>
+      </div>
+
+      {/* --- earlier sources ------------------------------------------- */}
+      <div>
+        <button type="button" className="lbl flex w-full items-center gap-1 text-left hover:text-neutral-200" onClick={() => setLibraryOpen((o) => !o)}>
+          <span className="inline-block w-3">{libraryOpen ? '▾' : '▸'}</span>
+          Earlier sources {sources ? `(${sources.length})` : ''}
+        </button>
+        {libraryOpen && (
+          <>
+            <p className="mt-1 mb-2 text-[11px] text-neutral-500">
+              Any earlier upload, run start, or step output can start the next run. Videos are not listed: no step accepts video input.
+            </p>
+            {!sources ? (
+              <p className="text-sm text-neutral-500">Loading…</p>
+            ) : sources.length === 0 ? (
+              <p className="text-sm text-neutral-500">Nothing yet.</p>
+            ) : (
+              <div className="grid max-h-80 grid-cols-2 gap-2 overflow-y-auto pr-1">
+                {sources.map((c) => (
+                  <button
+                    key={c.artifact.id}
+                    type="button"
+                    disabled={busy || c.isCurrent}
+                    title={`${c.label} — use as the next run's source`}
+                    onClick={() => guard(() => api.setSource(c.artifact.id))}
+                    className={cx(
+                      'flex items-start gap-2 rounded-md border p-1.5 text-left transition-colors',
+                      c.isCurrent ? 'border-emerald-700 bg-emerald-950/40' : 'border-neutral-800 bg-neutral-900/40 hover:border-neutral-600',
+                    )}
+                  >
+                    {c.artifact.kind === 'image' ? (
+                      <img src={mediaUrl(c.artifact.id)} alt="" className="h-14 w-14 shrink-0 rounded object-cover" />
+                    ) : (
+                      <div className="h-14 w-14 shrink-0 overflow-hidden rounded bg-neutral-950 p-1 text-[9px] leading-tight text-neutral-300">
+                        {c.artifact.text}
+                      </div>
+                    )}
+                    <span className="min-w-0 flex-1 text-[11px] text-neutral-400">
+                      <span className="block truncate text-neutral-300">{c.label}</span>
+                      <span className="block">{fmtTime(c.createdAt)}</span>
+                      {c.isCurrent && <Pill tone="ok">current source</Pill>}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
+        )}
       </div>
     </Section>
   );

@@ -187,6 +187,15 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
     if (!sessions.decideUpload(id, decision === 'accept')) return reply.code(404).send({ error: 'Upload not found.' });
     return sessions.hostView();
   });
+  app.get('/api/sources', { preHandler: requireHost }, async () => ({ sources: sessions.sourceCandidates() }));
+  app.post('/api/session/source', { preHandler: requireHost }, async (req, reply) => {
+    const { artifactId } = z.object({ artifactId: z.string().min(1).max(64) }).parse(req.body);
+    const a = store.get(artifactId);
+    if (!a) return reply.code(404).send({ error: 'Artifact not found.' });
+    if (a.kind === 'video') return reply.code(400).send({ error: 'No step in this build accepts a video as input, so a video cannot be a starting source.' });
+    sessions.setSource(artifactId);
+    return sessions.hostView();
+  });
   app.post('/api/session/select-run', { preHandler: requireHost }, async (req) => {
     const b = z.object({ runId: z.string().nullable(), replay: z.boolean().default(false) }).parse(req.body);
     sessions.selectRun(b.runId, b.replay);

@@ -64,6 +64,40 @@ export class Sessions {
     return true;
   }
 
+  /** Host-only: make any earlier artifact the next run's source again. */
+  setSource(artifactId: string) {
+    this.db.prepare('UPDATE sessions SET source_artifact_id = ? WHERE id = ?').run(artifactId, this.current().id);
+    this.bus.publish(null, 'session.changed');
+  }
+
+  /**
+   * Everything the host may start a new run from: this session's uploads, and the source or any
+   * output of any earlier run. Video is excluded because no step in this build accepts video input.
+   */
+  sourceCandidates(limit = 100) {
+    const rows = this.db.prepare(`
+      SELECT * FROM (
+        SELECT a.id AS id, a.kind AS kind, a.created_at AS created_at,
+          COALESCE(
+            (SELECT 'upload · ' || u.origin FROM uploads u WHERE u.artifact_id = a.id ORDER BY u.created_at LIMIT 1),
+            (SELECT 'start of ' || r.name FROM runs r WHERE r.source_artifact_id = a.id ORDER BY r.created_at LIMIT 1),
+            (SELECT 'step ' || (s.step_index + 1) || ' of ' || r2.name
+               FROM step_executions s JOIN runs r2 ON r2.id = s.run_id
+              WHERE s.artifact_id = a.id ORDER BY r2.created_at LIMIT 1)
+          ) AS label
+        FROM artifacts a
+        WHERE a.kind != 'video'
+      ) WHERE label IS NOT NULL
+      ORDER BY created_at DESC LIMIT ?`).all(limit) as any[];
+    const current = this.current().source_artifact_id;
+    return rows.map((r) => ({
+      artifact: this.store.view(this.store.get(r.id))!,
+      label: r.label as string,
+      createdAt: r.created_at as number,
+      isCurrent: r.id === current,
+    }));
+  }
+
   hostView() {
     const s = this.current();
     const uploads = (this.db.prepare('SELECT * FROM uploads WHERE session_id = ? ORDER BY created_at DESC LIMIT 20').all(s.id) as any[]).map((u) => ({

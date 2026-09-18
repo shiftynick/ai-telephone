@@ -20,7 +20,9 @@ Host routes need the `tele_host` HttpOnly cookie (obtained via `/api/auth/exchan
 - `POST /api/session/rotate {which:'upload'|'projector'|'both'}` → SessionView (revokes old tokens)
 - `POST /api/session/uploads` multipart field `file` (desktop upload) → `{uploadId, width, height, transformations, session}`; still needs Accept.
 - `POST /api/session/source-text {text}` → SessionView (text source, auto-accepted)
-- `POST /api/session/uploads/:id/accept|reject` → SessionView. Accept = becomes the next run's source. Never starts a run.
+- `POST /api/session/uploads/:id/accept|reject` → SessionView. Accept = becomes the next run's source. Never starts a run. Accepting an already-accepted upload again is allowed (that is how you go back to an older photo).
+- `GET /api/sources` → `{sources: {artifact: ArtifactView, label: string, createdAt: number, isCurrent: boolean}[]}` — every artifact the host may start a run from: session uploads, run sources, and step outputs, newest first, excluding video. Labels read `upload · phone`, `start of <run>`, `step 3 of <run>`.
+- `POST /api/session/source {artifactId}` → SessionView. Makes any earlier artifact the next run's source. 404 unknown artifact; 400 for a video (no step accepts video input in this build).
 - `POST /api/session/select-run {runId|null, replay:boolean}` → SessionView. Chooses what the projector shows. `replay:true` = Replay label, no provider calls.
 - `POST /api/session/reveal` body one of `{action:'show',stage}`, `{action:'next'}`, `{action:'prev'}`, `{action:'final'}`, `{action:'reset'}`, `{action:'compare',on}`, `{action:'auto',on}` → SessionView.
   Stage 0 = source, stage N = output of step N. Auto-reveal (default on) reveals each output as it completes; turn it off for "final-result-first" (then `final`, then `prev` to rewind).

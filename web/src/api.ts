@@ -39,6 +39,13 @@ export type SessionView = {
   compare: boolean;
 };
 
+export type SourceCandidate = {
+  artifact: ArtifactView;
+  label: string;
+  createdAt: number;
+  isCurrent: boolean;
+};
+
 export type LanView = {
   candidates: { name: string; address: string }[];
   active: { address: string; port: number } | null;
@@ -140,6 +147,8 @@ export const api = {
   rotate: (which: 'upload' | 'projector' | 'both') => json<SessionView>('/api/session/rotate', 'POST', { which }),
   sourceText: (text: string) => json<SessionView>('/api/session/source-text', 'POST', { text }),
   decideUpload: (id: string, decision: 'accept' | 'reject') => json<SessionView>(`/api/session/uploads/${id}/${decision}`, 'POST'),
+  sources: () => request<{ sources: SourceCandidate[] }>('/api/sources'),
+  setSource: (artifactId: string) => json<SessionView>('/api/session/source', 'POST', { artifactId }),
   selectRun: (runId: string | null, replay: boolean) => json<SessionView>('/api/session/select-run', 'POST', { runId, replay }),
   reveal: (action: RevealAction) => json<SessionView>('/api/session/reveal', 'POST', action),
   desktopUpload: (file: File) => {

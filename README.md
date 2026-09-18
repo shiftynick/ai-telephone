@@ -43,6 +43,8 @@ Other scripts: `npm run dev` (Vite + watch server, open the printed `localhost:5
 2. Phone scans the QR, then either takes/chooses a photo **or types a starting sentence**. Both arrive as pending
    uploads. **Sending never starts a billable call**, and the phone can never make itself the source.
 3. Host clicks **Accept as source**, picks a preset (or edits the pipeline), **Create run**, **Start**.
+   To start from something older, re-accept any earlier upload, or open **Earlier sources** for every
+   past upload, run start and step output (video excluded — no step takes video input).
 4. Open the **projector link** in a second window on the projector display. With auto-reveal on (default) each
    result appears as it completes; switch to **Final-result-first** to hide everything, reveal the final
    video, then rewind. **Compare** shows start vs final side by side. Video needs a click on Play

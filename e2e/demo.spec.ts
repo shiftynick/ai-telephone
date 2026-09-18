@@ -68,6 +68,11 @@ test('host runs the quick demo; projector follows; phone page uploads', async ({
   expect((await phone.evaluate(async () => (await fetch('/api/runs')).status))).toBe(401);
   await phoneCtx.close();
 
+  // Earlier sources: the run's own outputs are offered as starting points for the next run.
+  await page.getByRole('button', { name: /Earlier sources/ }).click();
+  const candidates = page.locator('button[title$="use as the next run\'s source"]');
+  await expect.poll(async () => candidates.count()).toBeGreaterThan(1);
+
   // The upload shows up for the host without starting a run.
   await expect.poll(async () => (await api(page, '/api/session')).uploads.filter((u: any) => u.origin === 'phone').length).toBe(1);
   expect((await api(page, '/api/runs')).runs.length).toBe(before);
