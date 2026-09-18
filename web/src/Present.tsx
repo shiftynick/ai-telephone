@@ -64,7 +64,7 @@ export default function Present({ token }: { token: string }) {
   const [state, setState] = useState<PresentState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [offset, setOffset] = useState(0); // local clock − server clock
-  const [detail, setDetail] = useState<PresentStage | null>(null);
+  const [detailStage, setDetailStage] = useState<number | null>(null); // viewer-local browsing; never sent to the server
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
@@ -91,6 +91,25 @@ export default function Present({ token }: { token: string }) {
       clearInterval(iv);
     };
   }, [token]);
+
+  // When the host moves the stage, the projector follows again.
+  useEffect(() => setDetailStage(null), [state?.currentStage, state?.compare]);
+
+  // ← / → flip through REVEALED stages locally; Esc returns to the host's stage.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!state?.hasRun) return;
+      if (e.key === 'Escape') return setDetailStage(null);
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      const open = state.stages.filter((s) => s.revealed && s.artifact).map((s) => s.stage);
+      if (!open.length) return;
+      const from = detailStage ?? state.currentStage;
+      const next = e.key === 'ArrowRight' ? open.find((n) => n > from) : [...open].reverse().find((n) => n < from);
+      if (next !== undefined) setDetailStage(next);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [state, detailStage]);
 
   const running = state?.stages.some((s) => s.status === 'running');
   useEffect(() => {
@@ -130,6 +149,8 @@ export default function Present({ token }: { token: string }) {
   const runningStage = stages.find((s) => s.status === 'running');
   const finalRevealed = [...stages].reverse().find((s) => s.revealed && s.stage > 0) ?? null;
   const source = stages[0];
+  const found = detailStage === null ? null : (stages.find((s) => s.stage === detailStage) ?? null);
+  const detail = found?.revealed && found.artifact ? found : null;
 
   const label =
     current.stage === 0
@@ -195,35 +216,37 @@ export default function Present({ token }: { token: string }) {
         )}
       </div>
 
-      {/* progress strip */}
-      <div className="flex items-center gap-[0.6vw] px-[2vw] pb-[2.2vh]">
+      {/* step bar: always visible, above the detail view, for flipping through revealed steps */}
+      <div className="relative z-30 flex items-stretch gap-[0.5vw] bg-[#0a0a0a] px-[2vw] pt-[0.8vh] pb-[1.6vh]">
         {stages.map((s) => {
-          const isCurrent = s.stage === state.currentStage && !state.compare;
+          const isHostStage = s.stage === state.currentStage && !state.compare;
+          const isViewing = detail ? detail.stage === s.stage : isHostStage;
           const tone = s.revealed
-            ? 'bg-neutral-300'
+            ? 'bg-neutral-800 text-neutral-200 hover:bg-neutral-700'
             : s.status === 'running'
-              ? 'bg-sky-600 animate-pulse'
-              : s.status === 'done'
-                ? 'bg-neutral-600'
-                : s.status === 'failed'
-                  ? 'bg-red-800'
-                  : 'bg-neutral-800';
+              ? 'bg-sky-950 text-sky-300 animate-pulse'
+              : s.status === 'failed'
+                ? 'bg-red-950 text-red-300'
+                : 'bg-neutral-900 text-neutral-600';
           return (
             <button
               key={s.stage}
               type="button"
               disabled={!s.revealed}
-              onClick={() => setDetail(s)}
-              title={s.revealed ? `${s.label} — open details` : ''}
-              className={cx('h-[0.9vh] min-h-[4px] flex-1 rounded-full transition-colors', tone, isCurrent && 'ring-2 ring-sky-400', s.revealed && 'cursor-pointer')}
-            />
+              onClick={() => setDetailStage(detail?.stage === s.stage ? null : s.stage)}
+              title={s.revealed ? `${s.label} — view with its exact instruction (←/→ to flip, Esc to return)` : 'not revealed yet'}
+              className={cx('min-w-0 flex-1 truncate rounded px-[0.4vw] py-[0.6vh] text-center transition-colors', tone, isViewing && 'ring-2 ring-sky-400', s.revealed && 'cursor-pointer')}
+              style={{ fontSize: 'clamp(9px, 0.85vw, 16px)' }}
+            >
+              {s.stage === 0 ? 'Start' : `${s.stage} · ${s.label}`}
+            </button>
           );
         })}
       </div>
 
       {/* viewer-local detail overlay: only ever shows a revealed stage */}
-      {detail && detail.revealed && detail.artifact && (
-        <div className="fixed inset-0 z-20 flex flex-col bg-[#050505] p-[3vw]" onClick={() => setDetail(null)}>
+      {detail && detail.artifact && (
+        <div className="absolute inset-x-0 top-0 bottom-[6.5vh] z-20 flex flex-col bg-[#050505] px-[3vw] pt-[3vh] pb-[1vh]" onClick={() => setDetailStage(null)}>
           <div className="mb-[1.5vh] flex items-baseline gap-[1.5vw]">
             <span className="text-neutral-100" style={{ fontSize: 'clamp(14px, 1.6vw, 28px)' }}>
               {detail.stage === 0 ? `Starting ${detail.kind}` : `Step ${detail.stage} — ${detail.label}`}
@@ -232,7 +255,7 @@ export default function Present({ token }: { token: string }) {
               {detail.modelId ?? ''}
             </span>
             <span className="ml-auto text-neutral-500" style={{ fontSize: 'clamp(10px, 1vw, 18px)' }}>
-              click anywhere to close
+              ←/→ flip · Esc or click to return to the live stage
             </span>
           </div>
           <div className="min-h-0 flex-1" onClick={(e) => e.stopPropagation()}>
