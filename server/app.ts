@@ -146,9 +146,9 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
     const { confirmReplace, preset } = z.object({ confirmReplace: z.boolean().optional(), preset: PresetBody }).parse(req.body);
     if (confirmReplace !== true) return reply.code(428).send({ error: 'Replacing an existing preset requires explicit confirmation.' });
     const p = presets.replace((req.params as any).id, preset);
-    return p ?? reply.code(404).send({ error: 'Preset not found.' });
+    return p ?? reply.code(404).send({ error: 'Preset not found, or it is a read-only built-in (use Save as new).' });
   });
-  app.delete('/api/presets/:id', { preHandler: requireHost }, async (req, reply) => (presets.remove((req.params as any).id) ? { ok: true } : reply.code(404).send({ error: 'Preset not found.' })));
+  app.delete('/api/presets/:id', { preHandler: requireHost }, async (req, reply) => (presets.remove((req.params as any).id) ? { ok: true } : reply.code(404).send({ error: 'Preset not found, or it is a read-only built-in.' })));
 
   // ---- session, uploads, reveal --------------------------------------
 

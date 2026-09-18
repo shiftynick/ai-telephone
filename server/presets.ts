@@ -3,6 +3,8 @@ import { FAL_ENDPOINTS } from './providers/fal.ts';
 import { DEFAULT_INSTRUCTIONS, PRESET_SCHEMA_VERSION, PresetBody, type Preset, type StepDefinition, type StepType } from '../shared/types.ts';
 
 const GEMINI = 'google/gemini-3.8-flash';
+// Fastest tested describer in the 2026-09-18 smoke run (2.1s vs 9.1s for 3.8-flash).
+const FAST = 'google/gemini-2.5-flash';
 const LITE_IMAGE = 'google/gemini-3.1-flash-lite-image';
 
 let n = 0;
@@ -14,7 +16,7 @@ const step = (type: StepType, modelId: string, extra: Partial<StepDefinition> = 
   params: type === 'text_to_image' ? { aspect_ratio: '16:9' } : type.endsWith('video') ? { resolution: '768P', duration: 5, prompt_expansion_mode: 'balanced' } : {},
   ...extra,
 });
-const describe = (m = GEMINI, extra?: Partial<StepDefinition>) => step('image_to_text', m, extra);
+const describe = (m = FAST, extra?: Partial<StepDefinition>) => step('image_to_text', m, extra);
 const draw = (m = LITE_IMAGE) => step('text_to_image', m);
 const animate = () => step('image_to_video', FAL_ENDPOINTS.image_to_video);
 
@@ -27,7 +29,7 @@ export function builtinPresets(): { id: string; body: PresetBody }[] {
     p('builtin_quick', 'Quick demo', [describe(), draw(), describe(), draw(), animate()]),
     p('builtin_cross', 'Cross-model telephone', [describe(GEMINI), draw(LITE_IMAGE), describe('openai/gpt-4.1-mini'), draw('openai/gpt-image-2.5-flare'), animate()]),
     p('builtin_long', 'Long game', [describe(), draw(), describe(), draw(), describe(), draw(), animate()]),
-    p('builtin_caption', 'Caption bottleneck (intentionally lossy)', [describe(GEMINI, { instruction: CAPTION }), draw(), describe(GEMINI, { instruction: CAPTION }), draw(), animate()]),
+    p('builtin_caption', 'Caption bottleneck (intentionally lossy)', [describe(FAST, { instruction: CAPTION }), draw(), describe(FAST, { instruction: CAPTION }), draw(), animate()]),
   ];
 }
 
@@ -38,16 +40,16 @@ export class PresetStore {
   }
   seed() {
     for (const b of builtinPresets()) {
-      const exists = this.db.prepare('SELECT id FROM presets WHERE id = ?').get(b.id);
-      if (!exists) this.db.prepare('INSERT INTO presets(id, name, body, builtin, updated_at) VALUES(?,?,?,1,?)').run(b.id, b.body.name, JSON.stringify(b.body), now());
+      // Built-ins are read-only and refreshed on every boot so shipped defaults stay current.
+      this.db.prepare('INSERT INTO presets(id, name, body, builtin, updated_at) VALUES(?,?,?,1,0) ON CONFLICT(id) DO UPDATE SET name=excluded.name, body=excluded.body').run(b.id, b.body.name, JSON.stringify(b.body));
     }
   }
   list(): Preset[] {
-    return (this.db.prepare('SELECT * FROM presets ORDER BY builtin DESC, updated_at').all() as any[]).map((r) => ({ ...(JSON.parse(r.body) as PresetBody), id: r.id, updatedAt: r.updated_at }));
+    return (this.db.prepare('SELECT * FROM presets ORDER BY builtin DESC, updated_at').all() as any[]).map((r) => ({ ...(JSON.parse(r.body) as PresetBody), id: r.id, updatedAt: r.updated_at, builtin: !!r.builtin }));
   }
   get(id: string): Preset | null {
     const r = this.db.prepare('SELECT * FROM presets WHERE id = ?').get(id) as any;
-    return r ? { ...(JSON.parse(r.body) as PresetBody), id: r.id, updatedAt: r.updated_at } : null;
+    return r ? { ...(JSON.parse(r.body) as PresetBody), id: r.id, updatedAt: r.updated_at, builtin: !!r.builtin } : null;
   }
   create(body: PresetBody): Preset {
     const id = newId('pre');
@@ -56,10 +58,10 @@ export class PresetStore {
   }
   /** Overwrite requires the caller to have passed explicit confirmation (checked in the route). */
   replace(id: string, body: PresetBody): Preset | null {
-    const res = this.db.prepare('UPDATE presets SET name = ?, body = ?, updated_at = ? WHERE id = ?').run(body.name, JSON.stringify(body), now(), id);
+    const res = this.db.prepare('UPDATE presets SET name = ?, body = ?, updated_at = ? WHERE id = ? AND builtin = 0').run(body.name, JSON.stringify(body), now(), id);
     return Number(res.changes) ? this.get(id) : null;
   }
   remove(id: string) {
-    return Number(this.db.prepare('DELETE FROM presets WHERE id = ?').run(id).changes) > 0;
+    return Number(this.db.prepare('DELETE FROM presets WHERE id = ? AND builtin = 0').run(id).changes) > 0;
   }
 }

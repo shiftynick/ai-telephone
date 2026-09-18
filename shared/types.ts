@@ -53,7 +53,7 @@ export const PresetBody = z.object({
   steps: z.array(StepDefinition), // deliberately no max length
 });
 export type PresetBody = z.infer<typeof PresetBody>;
-export type Preset = PresetBody & { id: string; updatedAt: number };
+export type Preset = PresetBody & { id: string; updatedAt: number; builtin?: boolean };
 
 export type StepIssue = { index: number; message: string };
 
