@@ -1,0 +1,73 @@
+@import "tailwindcss";
+
+/* No external fonts or CDNs: everything here must work with networking disabled. */
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #0b0b0d;
+  color: #e7e7ea;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Small utility layer used by the dense host console. */
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-1 rounded-md border border-neutral-700 bg-neutral-800 px-2.5 py-1.5 text-sm text-neutral-100 transition-colors;
+  }
+  .btn:hover:not(:disabled) {
+    @apply bg-neutral-700;
+  }
+  .btn:disabled {
+    /* Also neutralises the primary/danger colours so a disabled control never looks live. */
+    @apply cursor-not-allowed border-neutral-800 bg-neutral-900 text-neutral-500 opacity-70;
+  }
+  .btn-primary {
+    @apply border-sky-500 bg-sky-600 text-white;
+  }
+  .btn-primary:hover:not(:disabled) {
+    @apply bg-sky-500;
+  }
+  .btn-danger {
+    @apply border-red-800 bg-red-900/60 text-red-100;
+  }
+  .btn-danger:hover:not(:disabled) {
+    @apply bg-red-800;
+  }
+  .btn-xs {
+    @apply px-1.5 py-0.5 text-xs;
+  }
+  .inp {
+    @apply w-full rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm text-neutral-100 outline-none;
+  }
+  .inp:focus {
+    @apply border-sky-500;
+  }
+  .card {
+    @apply rounded-lg border border-neutral-800 bg-neutral-900/60 p-3;
+  }
+  .lbl {
+    @apply block text-[11px] font-medium tracking-wide text-neutral-400 uppercase;
+  }
+}
+
+.fade-in {
+  animation: fadeIn 380ms ease-out both;
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
