@@ -93,6 +93,25 @@ export default function RevealControls({
         </button>
         <button
           type="button"
+          className="btn btn-xs btn-danger"
+          disabled={busy}
+          title="Take this run off the projector and show the title screen. The run stays in the run list."
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await api.selectRun(null, false);
+              onChanged();
+            } catch (e) {
+              onError(String((e as Error).message));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          Clear projector
+        </button>
+        <button
+          type="button"
           className={cx('btn btn-xs', session.compare && 'btn-primary')}
           disabled={busy}
           onClick={() => send({ action: 'compare', on: !session.compare })}

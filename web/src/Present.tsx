@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { INSTRUCTION_SETS, NEXT_ACTIONS, PRESET_SCHEMA_VERSION, type ArtifactKind, type ArtifactView, type PresentStage, type PresentState, type RunView, type StepType } from '../../shared/types.ts';
+import { FASTEST_MODELS, INSTRUCTION_SETS, NEXT_ACTIONS, PRESET_SCHEMA_VERSION, type ModelsView, type ArtifactKind, type ArtifactView, type PresentStage, type PresentState, type RunView, type StepType } from '../../shared/types.ts';
 import { ALLOWED_ACTIONS, ApiError, api, mediaUrl, type RevealAction, type RunAction, type SourceCandidate } from './api.ts';
 import { cx, fmtDuration, fmtMoney } from './util.tsx';
 
@@ -162,6 +162,22 @@ export default function Present({ token }: { token: string }) {
   const [startOpen, setStartOpen] = useState(false);
   const [twist, setTwist] = useState('');
   const [advSet, setAdvSet] = useState('faithful');
+  // Model per action type for the NEXT step ('' = fastest tested). Remembered across reloads.
+  const [models, setModels] = useState<ModelsView | null>(null);
+  const [advModels, setAdvModels] = useState<Partial<Record<StepType, string>>>(() => {
+    try { return JSON.parse(localStorage.getItem('tele.advModels') ?? '{}'); } catch { return {}; }
+  });
+  const pickModel = (type: StepType, id: string) => setAdvModels((m) => {
+    const next = { ...m, [type]: id };
+    localStorage.setItem('tele.advModels', JSON.stringify(next));
+    return next;
+  });
+  useEffect(() => {
+    if (!isHost) return;
+    let alive = true;
+    api.models().then((m) => alive && setModels(m), () => {});
+    return () => { alive = false; };
+  }, [isHost]);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const [bottomH, setBottomH] = useState(0);
 
@@ -304,6 +320,15 @@ export default function Present({ token }: { token: string }) {
     if (up) await newAdventure(up.artifact.id, 'image');
     setStartOpen(false);
   });
+  /** Take the current run off the projector (it stays in the run list) and return to the title screen. */
+  const clearProjector = () => guarded(async () => {
+    await api.selectRun(null, false);
+    setRun(null);
+    setRunId(null);
+    setDetailStage(null);
+    setTwist('');
+    setState(await api.presentState(token));
+  });
   const startChooser = startOpen && isHost ? <AdventureStart busy={busy} onPick={beginFrom} onText={beginFromText} onFile={beginFromFile} onClose={() => setStartOpen(false)} /> : null;
 
   // When the host moves the stage, the projector follows again.
@@ -391,7 +416,7 @@ export default function Present({ token }: { token: string }) {
   const choose = (type: StepType) => guarded(async () => {
     if (!onScreen?.artifact) return;
     const target = atTip && run ? run.id : (await newAdventure(onScreen.artifact.id, onScreen.kind)).id;
-    setRun(await api.appendStep(target, type, twist.trim() || undefined, advSet));
+    setRun(await api.appendStep(target, type, { twist: twist.trim() || undefined, instructionSet: advSet, modelId: advModels[type] || undefined }));
     setTwist('');
     setDetailStage(null);
   });
@@ -477,6 +502,15 @@ export default function Present({ token }: { token: string }) {
             <button type="button" className="pbtn" disabled={busy} onClick={() => void reveal({ action: 'final' })}>Final</button>
             <button type="button" className={cx('pbtn', state.compare && 'pbtn-on')} disabled={busy} onClick={() => void reveal({ action: 'compare', on: !state.compare })}>Compare</button>
             <button type="button" className="pbtn" disabled={busy} onClick={() => void reveal({ action: 'reset' })}>Hide all</button>
+            <button
+              type="button"
+              className="pbtn pbtn-danger"
+              disabled={busy || run?.status === 'running'}
+              title="Take this run off the projector and return to the title screen. The run stays in the run list."
+              onClick={() => void clearProjector()}
+            >
+              ⏏ Clear screen
+            </button>
 
             <span className="ml-[1.5vw] tracking-widest text-neutral-500 uppercase">Run</span>
             {run ? (
@@ -485,7 +519,8 @@ export default function Present({ token }: { token: string }) {
                   key={a}
                   type="button"
                   className={cx('pbtn', a === 'stop' && 'pbtn-danger')}
-                  disabled={busy || !ALLOWED_ACTIONS[run.status].includes(a)}
+                  // an adventure with no pending step has nothing to start; its actions live in the row below
+                  disabled={busy || !ALLOWED_ACTIONS[run.status].includes(a) || (!!run.interactive && a !== 'stop' && a !== 'pause' && a !== 'retry' && run.currentStepIndex >= run.steps.length)}
                   onClick={() => void act(a)}
                 >
                   {a === 'next' ? 'Next step' : a === 'pause' ? 'Pause' : a[0].toUpperCase() + a.slice(1)}
@@ -518,11 +553,36 @@ export default function Present({ token }: { token: string }) {
             {onScreen && actions.length > 0 && (
               <>
                 <span className="ml-[1vw] text-neutral-500">next:</span>
-                {actions.map((t) => (
-                  <button key={t} type="button" className="pbtn pbtn-go" disabled={busy || run?.status === 'running'} onClick={() => void choose(t)}>
-                    {ACTION_LABEL[t]}
-                  </button>
-                ))}
+                {actions.map((t) => {
+                  const options = (models?.models ?? []).filter((m) => m.stepTypes.includes(t) && (m.favorite || m.id === advModels[t]));
+                  const chosen = advModels[t] ?? '';
+                  return (
+                    <span key={t} className="inline-flex items-stretch">
+                      <button type="button" className="pbtn pbtn-go rounded-r-none" disabled={busy || run?.status === 'running'} onClick={() => void choose(t)}>
+                        {ACTION_LABEL[t]}
+                      </button>
+                      <select
+                        value={chosen}
+                        title={`Model for "${ACTION_LABEL[t]}"`}
+                        onChange={(e) => {
+                          if (e.target.value !== '__other') return pickModel(t, e.target.value);
+                          const id = window.prompt('Model ID (checked against the catalog when the step is added):', chosen)?.trim();
+                          if (id) pickModel(t, id);
+                        }}
+                        className="max-w-[11vw] rounded-r border border-l-0 border-sky-800 bg-neutral-900 px-[0.3vw] text-neutral-300"
+                      >
+                        <option value="">fastest · {FASTEST_MODELS[t].split('/').pop()}</option>
+                        {options.filter((m) => m.id !== FASTEST_MODELS[t]).map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.id.split('/').slice(-1)[0]}{m.testState === 'failed' ? ' (failed test)' : m.testState === 'catalog-only' ? ' (untested)' : ''}
+                          </option>
+                        ))}
+                        {chosen && !options.some((m) => m.id === chosen) && <option value={chosen}>{chosen}</option>}
+                        <option value="__other">other…</option>
+                      </select>
+                    </span>
+                  );
+                })}
                 <select
                   value={advSet}
                   onChange={(e) => setAdvSet(e.target.value)}

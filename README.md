@@ -53,7 +53,9 @@ Other scripts: `npm run dev` (Vite + watch server, open the printed `localhost:5
    adventure* on the idle screen), pick a starting sentence, upload, or any earlier image/text, then pick the
    next action for whatever is on screen — *Describe it / Animate it* for an image, *Draw it / Retell it /
    Film it* for text — as many times as you like, with an optional twist ("as a watercolour"). Each choice is
-   exactly one provider call using the fastest tested model. Open an earlier step in the step bar and choose an
+   exactly one provider call. The dropdown attached to each action picks its model (fastest tested by default,
+   the other favourites, or *other…* for any catalog ID; remembered in the browser). **⏏ Clear screen** takes
+   the run off the projector for a fresh start; the run stays in the run list. Open an earlier step in the step bar and choose an
    action there to **branch** into a new adventure; the original is left untouched. A video ends a path.
 6. Any completed run can be **replayed on the projector** with zero provider calls (works with networking
    disabled). A real saved rehearsal run ships in `fixtures/rehearsal` and is imported on first start.

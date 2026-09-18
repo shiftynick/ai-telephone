@@ -170,8 +170,13 @@ export const api = {
   run: (id: string) => request<RunView>(`/api/runs/${id}`),
   createRun: (body: { preset: PresetBody; sourceArtifactId?: string; budgetUsd?: number | null; select?: boolean; interactive?: boolean; autoBridge?: boolean; instructionSet?: string }) =>
     json<RunView>('/api/runs', 'POST', body),
-  appendStep: (id: string, type: StepType, twist?: string, instructionSet?: string) =>
-    json<RunView>(`/api/runs/${id}/steps`, 'POST', { type, ...(twist ? { twist } : {}), ...(instructionSet ? { instructionSet } : {}) }),
+  appendStep: (id: string, type: StepType, opts: { twist?: string; instructionSet?: string; modelId?: string } = {}) =>
+    json<RunView>(`/api/runs/${id}/steps`, 'POST', {
+      type,
+      ...(opts.twist ? { twist: opts.twist } : {}),
+      ...(opts.instructionSet ? { instructionSet: opts.instructionSet } : {}),
+      ...(opts.modelId ? { modelId: opts.modelId } : {}),
+    }),
   runAction: (id: string, action: RunAction, acknowledgeBilling = false) =>
     json<RunView>(`/api/runs/${id}/actions`, 'POST', { action, acknowledgeBilling }),
 

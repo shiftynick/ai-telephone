@@ -145,3 +145,42 @@ describe('interactive (adventure) runs', () => {
     expect((await get(app, `/api/runs/${id}`)).json().steps).toHaveLength(1); // the original is untouched
   });
 });
+
+describe('adventure model choice and clearing the projector', () => {
+  it('uses the chosen model for one step, the fastest otherwise, and rejects unusable models before any call', async () => {
+    const { app, mock } = await mockApp();
+    await imageSource(app);
+    const id = (await post(app, '/api/runs', { preset: empty('image'), interactive: true })).json().id;
+
+    await post(app, `/api/runs/${id}/steps`, { type: 'image_to_text' });
+    await app.runner.idle();
+    expect(mock.calls[0].modelId).toBe('google/gemini-2.5-flash'); // fastest tested default
+
+    const res = await post(app, `/api/runs/${id}/steps`, { type: 'text_to_image', modelId: 'openai/gpt-image-2.5-flare' });
+    expect(res.statusCode, res.body).toBe(200);
+    await app.runner.idle();
+    expect(mock.calls[1].modelId).toBe('openai/gpt-image-2.5-flare');
+
+    // a fal endpoint the adapter does not know is refused, and no step is added
+    const bad = await post(app, `/api/runs/${id}/steps`, { type: 'image_to_video', modelId: 'some/unknown-video-endpoint' });
+    expect(bad.statusCode).toBe(400);
+    expect(mock.calls).toHaveLength(2);
+    expect((await get(app, `/api/runs/${id}`)).json().steps).toHaveLength(2);
+  });
+
+  it('clearing the projector shows the idle screen and keeps the run', async () => {
+    const { app } = await mockApp();
+    await imageSource(app);
+    const id = (await post(app, '/api/runs', { preset: empty('image'), interactive: true })).json().id;
+    const token = (await get(app, '/api/session')).json().projectorToken;
+    expect((await get(app, `/api/present/${token}/state`, { cookie: null })).json().hasRun).toBe(true);
+
+    const cleared = (await post(app, '/api/session/select-run', { runId: null, replay: false })).json();
+    expect(cleared.selectedRunId).toBeNull();
+    const state = (await get(app, `/api/present/${token}/state`, { cookie: null })).json();
+    expect(state).toMatchObject({ hasRun: false, stages: [] });
+    expect((await get(app, `/api/runs/${id}`)).statusCode).toBe(200); // still in the run list
+    // and the projector token itself still cannot clear anything
+    expect((await post(app, '/api/session/select-run', { runId: null, replay: false }, { cookie: null })).statusCode).toBe(401);
+  });
+});

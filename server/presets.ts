@@ -1,6 +1,6 @@
 import { type DB, newId, now } from './db.ts';
 import { FAL_ENDPOINTS } from './providers/fal.ts';
-import { DEFAULT_INSTRUCTIONS, PRESET_SCHEMA_VERSION, PresetBody, type Preset, type StepDefinition, type StepType } from '../shared/types.ts';
+import { DEFAULT_INSTRUCTIONS, FASTEST_MODELS, PRESET_SCHEMA_VERSION, PresetBody, type Preset, type StepDefinition, type StepType } from '../shared/types.ts';
 
 const GEMINI = 'google/gemini-3.8-flash';
 // Fastest tested describer in the 2026-09-18 smoke run (2.1s vs 9.1s for 3.8-flash).
@@ -16,16 +16,8 @@ const step = (type: StepType, modelId: string, extra: Partial<StepDefinition> = 
   params: type === 'text_to_image' ? { aspect_ratio: '16:9' } : type.endsWith('video') ? { resolution: '768P', duration: 5, prompt_expansion_mode: 'balanced' } : {},
   ...extra,
 });
-/** Fastest tested model per step type (2026-09-18 smoke run). Used for auto-bridge steps and adventure mode. */
-const FASTEST: Record<StepType, string> = {
-  image_to_text: FAST,
-  text_to_image: LITE_IMAGE,
-  text_to_text: 'openai/gpt-4.1-mini',
-  image_to_video: FAL_ENDPOINTS.image_to_video,
-  text_to_video: FAL_ENDPOINTS.text_to_video,
-};
 export function defaultStep(type: StepType, extra: Partial<StepDefinition> = {}): StepDefinition {
-  return { ...step(type, FASTEST[type]), id: newId('stp'), ...extra };
+  return { ...step(type, FASTEST_MODELS[type]), id: newId('stp'), ...extra };
 }
 
 const describe = (m = FAST, extra?: Partial<StepDefinition>) => step('image_to_text', m, extra);

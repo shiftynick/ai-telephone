@@ -88,6 +88,15 @@ export function bridgeType(from: ArtifactKind, to: ArtifactKind): StepType | nul
   return null;
 }
 
+/** Fastest tested model per step type (2026-09-18 smoke run): the default for bridge steps and adventure actions. */
+export const FASTEST_MODELS: Record<StepType, string> = {
+  image_to_text: 'google/gemini-2.5-flash',
+  text_to_image: 'google/gemini-3.1-flash-lite-image',
+  text_to_text: 'openai/gpt-4.1-mini',
+  image_to_video: 'minimax/h3-max-turbo/image-to-video',
+  text_to_video: 'minimax/h3-max-turbo/text-to-video',
+};
+
 /** What can be done next with an artifact of each kind (interactive "adventure" mode). Nothing accepts video. */
 export const NEXT_ACTIONS: Record<ArtifactKind, StepType[]> = {
   image: ['image_to_text', 'image_to_video'],
