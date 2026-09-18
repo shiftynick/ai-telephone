@@ -1,0 +1,55 @@
+{
+  "name": "ai-telephone",
+  "version": "1.0.0",
+  "description": "Local multimodal AI telephone game",
+  "scripts": {
+    "dev": "concurrently -k -n server,web \"DEV_WEB_PORT=5173 node --watch-path=server --watch-path=shared server/index.ts\" \"vite\"",
+    "build": "vite build",
+    "start": "node server/index.ts",
+    "start:mock": "MOCK_PROVIDERS=1 node server/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "e2e": "playwright test",
+    "smoke": "node scripts/smoke.ts",
+    "export-run": "node scripts/export-run.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shiftynick/ai-telephone.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/shiftynick/ai-telephone/issues"
+  },
+  "homepage": "https://github.com/shiftynick/ai-telephone#readme",
+  "dependencies": {
+    "@fal-ai/client": "^1.10.1",
+    "@fastify/cookie": "^11.1.2",
+    "@fastify/multipart": "^10.1.1",
+    "@fastify/static": "^10.1.4",
+    "fastify": "^5.12.5",
+    "qrcode": "^1.5.4",
+    "sharp": "^0.35.4",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^26.6.1",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.5",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1"
+  },
+  "private": true
+}
