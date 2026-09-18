@@ -1,17 +1,8 @@
 import { useState } from 'react';
 import type { ArtifactView, AttemptView, RunView, StepView } from '../../shared/types.ts';
 import { STEP_TYPES } from '../../shared/types.ts';
-import { ApiError, api, mediaUrl, type RunAction, type RunListItem } from './api.ts';
+import { ALLOWED_ACTIONS as ALLOWED, ApiError, api, mediaUrl, type RunAction, type RunListItem } from './api.ts';
 import { Banner, Pill, Section, cx, fmtBytes, fmtDuration, fmtMoney, fmtTime, useNow } from './util.tsx';
-
-const ALLOWED: Record<RunView['status'], RunAction[]> = {
-  ready: ['start', 'next', 'stop'],
-  running: ['pause', 'stop'],
-  paused: ['resume', 'next', 'stop'],
-  failed: ['retry', 'stop'],
-  completed: [],
-  stopped: [],
-};
 
 const statusTone = (s: string) =>
   s === 'completed' || s === 'succeeded' ? 'ok' : s === 'failed' ? 'error' : s === 'running' ? 'accent' : s === 'paused' || s === 'unknown' ? 'warn' : 'neutral';

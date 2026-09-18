@@ -1,12 +1,23 @@
-import { useEffect, useRef, useState } from 'react';
-import type { ArtifactView, PresentStage, PresentState } from '../../shared/types.ts';
-import { api, mediaUrl } from './api.ts';
-import { cx } from './util.tsx';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ArtifactView, PresentStage, PresentState, RunView } from '../../shared/types.ts';
+import { ALLOWED_ACTIONS, ApiError, api, mediaUrl, type RevealAction, type RunAction } from './api.ts';
+import { cx, fmtDuration, fmtMoney } from './util.tsx';
 
 function VideoStage({ src, poster }: { src: string; poster?: string }) {
   const ref = useRef<HTMLVideoElement | null>(null);
   const [playing, setPlaying] = useState(false);
-  useEffect(() => setPlaying(false), [src]);
+  // Detaching the element is not enough in every browser: pause it and drop the source so no
+  // audio survives a step switch. Runs on unmount and whenever the source changes.
+  useEffect(() => {
+    setPlaying(false);
+    return () => {
+      const v = ref.current;
+      if (!v) return;
+      v.pause();
+      v.removeAttribute('src');
+      v.load();
+    };
+  }, [src]);
   return (
     <div className="relative flex h-full w-full items-center justify-center">
       <video
@@ -66,6 +77,16 @@ export default function Present({ token }: { token: string }) {
   const [offset, setOffset] = useState(0); // local clock − server clock
   const [detailStage, setDetailStage] = useState<number | null>(null); // viewer-local browsing; never sent to the server
   const [tick, setTick] = useState(0);
+  // Host controls appear only when this browser also holds the host cookie (i.e. the projector window
+  // was opened on the host's own machine). The projector token itself still grants nothing.
+  const [isHost, setIsHost] = useState(false);
+  const [run, setRun] = useState<RunView | null>(null);
+  const [runId, setRunId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [pinned, setPinned] = useState(false);
+  const [showControls, setShowControls] = useState(false);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -80,17 +101,84 @@ export default function Present({ token }: { token: string }) {
         if (alive) setError(String((e as Error).message));
       }
     };
+    const loadHost = async () => {
+      try {
+        const st = await api.status();
+        if (!alive || !st.host) return;
+        setIsHost(true);
+        const ses = await api.session();
+        if (!alive) return;
+        setRunId(ses.selectedRunId);
+        setRun(ses.selectedRunId ? await api.run(ses.selectedRunId) : null);
+      } catch {
+        /* not the host, or the session ended: stay a plain projector */
+      }
+    };
     void load();
+    void loadHost();
     const es = new EventSource(`/api/present/${encodeURIComponent(token)}/events`);
-    es.addEventListener('change', () => void load());
-    es.addEventListener('open', () => void load());
-    const iv = setInterval(() => void load(), 5000); // fallback if SSE is wedged
+    es.addEventListener('change', () => { void load(); void loadHost(); });
+    es.addEventListener('open', () => { void load(); void loadHost(); });
+    const iv = setInterval(() => { void load(); void loadHost(); }, 5000); // fallback if SSE is wedged
     return () => {
       alive = false;
       es.close();
       clearInterval(iv);
     };
   }, [token]);
+
+  // Controls fade in on mouse movement and fade out again, so they never sit on the projection.
+  useEffect(() => {
+    if (!isHost) return;
+    const wake = () => {
+      setShowControls(true);
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+      hideTimer.current = setTimeout(() => setShowControls(false), 3500);
+    };
+    wake();
+    window.addEventListener('mousemove', wake);
+    window.addEventListener('touchstart', wake);
+    return () => {
+      window.removeEventListener('mousemove', wake);
+      window.removeEventListener('touchstart', wake);
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+    };
+  }, [isHost]);
+
+  const reveal = useCallback(async (action: RevealAction) => {
+    setBusy(true);
+    setActionError(null);
+    try {
+      const ses = await api.reveal(action);
+      setRunId(ses.selectedRunId);
+      setState(await api.presentState(token));
+      setDetailStage(null);
+    } catch (e) {
+      setActionError(String((e as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  }, [token]);
+
+  const act = useCallback(async (action: RunAction) => {
+    if (!runId) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      setRun(await api.runAction(runId, action));
+    } catch (e) {
+      // 428 = the previous attempt's fate is unknown; retrying may bill a second time.
+      if (e instanceof ApiError && e.status === 428 && window.confirm(`${e.message}\n\nSubmit it again anyway?`)) {
+        try {
+          setRun(await api.runAction(runId, action, true));
+        } catch (e2) {
+          setActionError(String((e2 as Error).message));
+        }
+      } else setActionError(String((e as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  }, [runId]);
 
   // When the host moves the stage, the projector follows again.
   useEffect(() => setDetailStage(null), [state?.currentStage, state?.compare]);
@@ -100,7 +188,9 @@ export default function Present({ token }: { token: string }) {
     const onKey = (e: KeyboardEvent) => {
       if (!state?.hasRun) return;
       if (e.key === 'Escape') return setDetailStage(null);
+      if (e.key === 'c' && isHost) return setPinned((p) => !p);
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      if (isHost && detailStage === null) return void reveal({ action: e.key === 'ArrowRight' ? 'next' : 'prev' });
       const open = state.stages.filter((s) => s.revealed && s.artifact).map((s) => s.stage);
       if (!open.length) return;
       const from = detailStage ?? state.currentStage;
@@ -109,7 +199,7 @@ export default function Present({ token }: { token: string }) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [state, detailStage]);
+  }, [state, detailStage, isHost, reveal]);
 
   const running = state?.stages.some((s) => s.status === 'running');
   useEffect(() => {
@@ -180,7 +270,7 @@ export default function Present({ token }: { token: string }) {
 
       {/* stage */}
       <div className="relative min-h-0 flex-1 px-[2vw] py-[2vh]">
-        {state.compare ? (
+        {detail ? null : state.compare ? (
           <div className="grid h-full grid-cols-2 gap-[2vw]">
             {[
               { s: source, name: 'Start' },
@@ -191,13 +281,13 @@ export default function Present({ token }: { token: string }) {
                   {name}
                 </div>
                 <div className="min-h-0 flex-1">
-                  {s?.artifact ? <StageArtifact a={s.artifact} token={token} label={name} /> : <div className="h-full" />}
+                  {s?.artifact ? <StageArtifact key={s.artifact.id} a={s.artifact} token={token} label={name} /> : <div className="h-full" />}
                 </div>
               </div>
             ))}
           </div>
         ) : current.revealed && current.artifact ? (
-          <StageArtifact a={current.artifact} token={token} label={label} />
+          <StageArtifact key={current.artifact.id} a={current.artifact} token={token} label={label} />
         ) : runningStage ? (
           <div className="flex h-full flex-col items-center justify-center text-center text-neutral-400">
             <div style={{ fontSize: 'clamp(20px, 3vw, 56px)' }}>Generating step {runningStage.stage}…</div>
@@ -215,6 +305,64 @@ export default function Present({ token }: { token: string }) {
           </div>
         )}
       </div>
+
+      {/* host-only controls: present only when this browser holds the host cookie */}
+      {isHost && (
+        <div
+          className={cx(
+            'relative z-30 bg-[#0a0a0a]/95 px-[2vw] transition-opacity duration-300',
+            showControls || pinned || busy ? 'opacity-100' : 'pointer-events-none opacity-0',
+          )}
+          onMouseEnter={() => setShowControls(true)}
+        >
+          {actionError && (
+            <div className="mb-[0.6vh] truncate rounded bg-red-950 px-2 py-1 text-red-200" style={{ fontSize: 'clamp(9px, 0.85vw, 15px)' }}>
+              {actionError}
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-[0.5vw] pb-[0.8vh]" style={{ fontSize: 'clamp(9px, 0.85vw, 15px)' }}>
+            <span className="tracking-widest text-neutral-500 uppercase">Reveal</span>
+            <button type="button" className="pbtn" disabled={busy} onClick={() => void reveal({ action: 'prev' })}>◀ Prev</button>
+            <button type="button" className="pbtn" disabled={busy} onClick={() => void reveal({ action: 'next' })}>Next ▶</button>
+            <button type="button" className="pbtn" disabled={busy} onClick={() => void reveal({ action: 'final' })}>Final</button>
+            <button type="button" className={cx('pbtn', state.compare && 'pbtn-on')} disabled={busy} onClick={() => void reveal({ action: 'compare', on: !state.compare })}>Compare</button>
+            <button type="button" className="pbtn" disabled={busy} onClick={() => void reveal({ action: 'reset' })}>Hide all</button>
+
+            <span className="ml-[1.5vw] tracking-widest text-neutral-500 uppercase">Run</span>
+            {run ? (
+              (['start', 'pause', 'resume', 'next', 'stop', 'retry'] as RunAction[]).map((a) => (
+                <button
+                  key={a}
+                  type="button"
+                  className={cx('pbtn', a === 'stop' && 'pbtn-danger')}
+                  disabled={busy || !ALLOWED_ACTIONS[run.status].includes(a)}
+                  onClick={() => void act(a)}
+                >
+                  {a === 'next' ? 'Next step' : a === 'pause' ? 'Pause' : a[0].toUpperCase() + a.slice(1)}
+                </button>
+              ))
+            ) : (
+              <span className="text-neutral-600">no run selected — choose one in the host console</span>
+            )}
+
+            {run && (
+              <span className="ml-auto flex items-center gap-[1vw] text-neutral-400">
+                <span className={cx(run.status === 'failed' ? 'text-red-400' : run.status === 'running' ? 'text-sky-300' : 'text-neutral-300')}>{run.status}</span>
+                <span>step {Math.min(run.currentStepIndex + (run.status === 'running' ? 1 : 0), run.steps.length)}/{run.steps.length}</span>
+                {run.startedAt && <span>{fmtDuration((run.finishedAt ?? Date.now() - offset) - run.startedAt)}</span>}
+                <span>
+                  {fmtMoney(run.costActualUsd + run.costEstimatedUsd)}
+                  {run.costUnknownCount > 0 ? ` +${run.costUnknownCount} unknown` : ''}
+                </span>
+                <span className="text-neutral-600">{pinned ? 'pinned (c)' : 'c = pin'}</span>
+              </span>
+            )}
+          </div>
+          {run?.statusReason && (
+            <div className="truncate pb-[0.8vh] text-amber-300" style={{ fontSize: 'clamp(9px, 0.8vw, 14px)' }}>{run.statusReason}</div>
+          )}
+        </div>
+      )}
 
       {/* step bar: always visible, above the detail view, for flipping through revealed steps */}
       <div className="relative z-30 flex items-stretch gap-[0.5vw] bg-[#0a0a0a] px-[2vw] pt-[0.8vh] pb-[1.6vh]">
@@ -246,7 +394,11 @@ export default function Present({ token }: { token: string }) {
 
       {/* viewer-local detail overlay: only ever shows a revealed stage */}
       {detail && detail.artifact && (
-        <div className="absolute inset-x-0 top-0 bottom-[6.5vh] z-20 flex flex-col bg-[#050505] px-[3vw] pt-[3vh] pb-[1vh]" onClick={() => setDetailStage(null)}>
+        <div
+          className="absolute inset-x-0 top-0 z-20 flex flex-col bg-[#050505] px-[3vw] pt-[3vh] pb-[1vh]"
+          style={{ bottom: isHost ? '10.5vh' : '6.5vh' }} // clears the step bar, plus the control bar when present
+          onClick={() => setDetailStage(null)}
+        >
           <div className="mb-[1.5vh] flex items-baseline gap-[1.5vw]">
             <span className="text-neutral-100" style={{ fontSize: 'clamp(14px, 1.6vw, 28px)' }}>
               {detail.stage === 0 ? `Starting ${detail.kind}` : `Step ${detail.stage} — ${detail.label}`}
@@ -259,7 +411,7 @@ export default function Present({ token }: { token: string }) {
             </span>
           </div>
           <div className="min-h-0 flex-1" onClick={(e) => e.stopPropagation()}>
-            <StageArtifact a={detail.artifact} token={token} />
+            <StageArtifact key={detail.artifact.id} a={detail.artifact} token={token} />
           </div>
           {detail.instruction && (
             <div

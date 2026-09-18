@@ -53,6 +53,8 @@ test('host runs the quick demo; projector follows; phone page uploads', async ({
   // A projector token cannot mutate anything.
   const status = await projector.evaluate(async () => (await fetch('/api/session/reveal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"action":"reset"}' })).status);
   expect(status).toBe(401);
+  // A projector viewer without the host cookie never sees the host control overlay.
+  expect(await projector.getByRole('button', { name: 'Next ▶' }).count()).toBe(0);
   await projCtx.close();
 
   // Phone page in a separate, cookie-less mobile context.

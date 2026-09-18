@@ -71,3 +71,12 @@ body {
     opacity: 1;
   }
 }
+
+/* projector host-control buttons */
+.pbtn {
+  @apply rounded border border-neutral-700 bg-neutral-900 px-[0.8vw] py-[0.5vh] text-neutral-200 transition-colors;
+}
+.pbtn:hover:not(:disabled) { @apply border-neutral-500 bg-neutral-800; }
+.pbtn:disabled { @apply cursor-not-allowed border-neutral-800 text-neutral-600; }
+.pbtn-on { @apply border-sky-500 bg-sky-950 text-sky-200; }
+.pbtn-danger:not(:disabled) { @apply border-red-800 text-red-300; }

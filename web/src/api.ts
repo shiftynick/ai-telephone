@@ -59,6 +59,16 @@ export type RevealAction =
 
 export type RunAction = 'start' | 'next' | 'pause' | 'resume' | 'stop' | 'retry';
 
+/** Which run controls are valid in each status (shared by the host console and the projector overlay). */
+export const ALLOWED_ACTIONS: Record<RunView['status'], RunAction[]> = {
+  ready: ['start', 'next', 'stop'],
+  running: ['pause', 'stop'],
+  paused: ['resume', 'next', 'stop'],
+  failed: ['retry', 'stop'],
+  completed: [],
+  stopped: [],
+};
+
 // ---- error type -----------------------------------------------------------
 
 export class ApiError extends Error {
