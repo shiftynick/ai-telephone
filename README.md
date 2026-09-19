@@ -57,7 +57,12 @@ Other scripts: `npm run dev` (Vite + watch server, open the printed `localhost:5
    the other favourites, or *other…* for any catalog ID; remembered in the browser). **⏏ Clear screen** takes
    the run off the projector for a fresh start; the run stays in the run list. Open an earlier step in the step bar and choose an
    action there to **branch** into a new adventure; the original is left untouched. A video ends a path.
-6. Any completed run can be **replayed on the projector** with zero provider calls (works with networking
+   **🎞 keyframes** next to the actions makes *Animate it* send the run's last 2–5 images as keyframes (see below).
+6. **Autoplay (any projector window, local only):** the **▶ Autoplay** group at the left of the step bar cycles
+   through the revealed steps — *images only* (default), *text only* or *everything* — at 0.3–8 s per step
+   (**−/+**, or the `-`/`+` keys; **Space** starts/stops, **Esc** returns to the live stage). Images are
+   preloaded so the fast speeds work as a flip-book of a long run; a video plays muted for its full length.
+7. Any completed run can be **replayed on the projector** with zero provider calls (works with networking
    disabled). A real saved rehearsal run ships in `fixtures/rehearsal` and is imported on first start.
 
 If phone → laptop does not connect: venue Wi-Fi often isolates clients. Use a personal hotspot, or transfer
@@ -81,12 +86,34 @@ the photo manually and use desktop upload. If `ufw` is active: `sudo ufw allow 8
 |---|---|---|
 | Quick demo | describe → draw → describe → draw → animate (5 steps) | ~$0.07 + 1 video, ≈ 18 s |
 | Cross-model telephone | same shape, alternating Gemini / OpenAI models | ~$0.11 + 1 video |
-| Long game | 3 describe/draw pairs, then a video (7 steps) | ~$0.11 + 1 video |
-| **Very long game (20 steps, no video)** | 10 describe/draw pairs, **no video**, fastest tested model per step (`gemini-2.5-flash` + `gemini-3.1-flash-lite-image`) | ~$0.35, ≈ 1 min of provider time |
+| Long game | describe/draw pair **×3** (repeat block), then a video (7 steps) | ~$0.11 + 1 video |
+| **Very long game (20 steps, no video)** | one describe/draw pair **×10** (repeat block), **no video**, fastest tested model per step (`gemini-2.5-flash` + `gemini-3.1-flash-lite-image`) | ~$0.35, ≈ 1 min of provider time |
 | Caption bottleneck | ~20-word descriptions: an intentionally lossy experiment | ~$0.07 + 1 video |
 
 The Very long game fits inside the default $2 budget, but it is 10 image generations — start it before you
 talk, not during a pause. Drift is an observation, not a guaranteed outcome.
+
+### Repeat blocks
+
+Any step card can open a repeat: **↻ repeat** → *this step* / *this + next N* → **×2–50**. The block is unrolled
+into ordinary flat steps when the run is created (the run timeline and projector show all of them), so nothing
+about execution changes. A block must be able to loop — its last output kind must match its first input kind
+(describe + draw works; describe alone does not) — and blocks cannot overlap; both are explained on the card
+before anything is billed. Limit: 200 unrolled steps.
+
+### Keyframe video (opt-in exception to the telephone rule)
+
+An image → video step has a **Keyframes** parameter. At 1 (default) it is classic telephone: only the previous
+image. At 2+ the step also receives the run's most recent earlier images, oldest first, with the predecessor
+always last — so a storyboard run can be animated *through* its frames. This deliberately breaks
+predecessor-only input for that one step, and the editor says so.
+
+| Endpoint | Keyframes | Live test 2026-09-19 |
+|---|---|---|
+| `minimax/h3-max-turbo/image-to-video` | 2 (`image_url` first frame + `end_image_url` last frame) | OK, 8.8 s, 1344×768, 5.2 s clip |
+| `fal-ai/pika/v2.2/pikaframes` | 2–5 (`image_urls`, one transition per gap; *Duration* is split across them) | OK, **63 s**, 1280×720, 6.1 s clip; 720p/1080p only |
+
+Pikaframes is about 7× slower — start it before you talk. fal reports no cost for either (listed ≈ $0.04/s for Pika).
 
 ## Instruction sets: same pipeline, different words
 
@@ -101,6 +128,7 @@ identical, so the instruction wording is the only variable.
 | Forensic detail | Exhaustive and literal: counts, positions, verbatim text, locked camera |
 | Minimal *(experiment)* | One-sentence captions and bare prompts: a deliberately narrow channel |
 | Storyteller *(experiment)* | Mood and narrative; invites embellishment |
+| Storyboard *(experiment)* | Each description is of the **next** frame of the story, written as a standalone image, so the chain walks through a plot instead of copying. Pair it with the Very long game, autoplay, and a keyframe video |
 | Child's-eye view *(experiment)* | Simple words, picture-book images |
 
 Sets marked *experiment* change meaning by design, so do not present their drift as ordinary model failure.

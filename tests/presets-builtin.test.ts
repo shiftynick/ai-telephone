@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { closeAll, get, makeApp } from './helpers.ts';
-import { STEP_TYPES, validateChain } from '../shared/types.ts';
+import { STEP_TYPES, expandRepeats, validateChain } from '../shared/types.ts';
 
 afterEach(closeAll);
 
@@ -10,8 +10,11 @@ describe('built-in presets', () => {
     const presets = (await get(app, '/api/presets')).json().presets;
     const long = presets.find((p: any) => p.id === 'builtin_verylong');
     expect(long).toBeTruthy();
-    expect(long.steps).toHaveLength(20);
     expect(validateChain(long.startingKind, long.steps)).toEqual([]);
+    // stored as one describe/draw pair with a ×10 repeat block; a run unrolls it to 20 flat steps
+    expect(long.steps).toHaveLength(2);
+    long.steps = expandRepeats(long.steps).steps;
+    expect(long.steps).toHaveLength(20);
 
     // alternates describe/generate, starts from the uploaded image, ends on an image
     expect(long.steps.map((s: any) => s.type)).toEqual(

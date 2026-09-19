@@ -15,7 +15,7 @@ const mockApp = async () => {
 
 describe('instruction sets', () => {
   it('are complete and distinct, and every image description keeps the prompt-injection guard', () => {
-    expect(INSTRUCTION_SETS.map((s) => s.id)).toEqual(['faithful', 'forensic', 'minimal', 'storyteller', 'childlike']);
+    expect(INSTRUCTION_SETS.map((s) => s.id)).toEqual(['faithful', 'forensic', 'minimal', 'storyteller', 'storyboard', 'childlike']);
     expect(new Set(INSTRUCTION_SETS.map((s) => s.id)).size).toBe(INSTRUCTION_SETS.length);
     expect(INSTRUCTION_SETS[0].instructions).toEqual(DEFAULT_INSTRUCTIONS);
     for (const set of INSTRUCTION_SETS) {
@@ -25,7 +25,7 @@ describe('instruction sets', () => {
       expect(set.instructions.text_to_image.length).toBeGreaterThan(10);
     }
     // interpretive/lossy sets are labelled as experiments so drift is not misread as model failure
-    expect(INSTRUCTION_SETS.filter((s) => s.experiment).map((s) => s.id)).toEqual(['minimal', 'storyteller', 'childlike']);
+    expect(INSTRUCTION_SETS.filter((s) => s.experiment).map((s) => s.id)).toEqual(['minimal', 'storyteller', 'storyboard', 'childlike']);
     const describes = INSTRUCTION_SETS.map((s) => s.instructions.image_to_text);
     expect(new Set(describes).size).toBe(describes.length);
   });

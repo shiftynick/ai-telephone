@@ -1,6 +1,9 @@
 import { useRef } from 'react';
 import {
   DEFAULT_INSTRUCTIONS,
+  KEYFRAME_MODELS,
+  PIKAFRAMES,
+  expandRepeats,
   INSTRUCTION_SETS,
   PRESET_SCHEMA_VERSION,
   STEP_TYPES,
@@ -101,14 +104,34 @@ function ParamControls({
   }
 
   if (step.type === 'image_to_video' || step.type === 'text_to_video') {
+    const resolutions = entry?.params?.resolution ?? ['480P', '768P'];
+    const maxFrames = step.type === 'image_to_video' ? (KEYFRAME_MODELS[step.modelId] ?? 1) : 1;
     return (
       <div className="grid grid-cols-3 gap-2">
+        {maxFrames > 1 && (
+          <div className="col-span-3">
+            <label className="lbl">Keyframes</label>
+            <select className="inp mt-1" value={step.params.keyframes ?? 1} onChange={(e) => set({ keyframes: Number(e.target.value) > 1 ? Number(e.target.value) : undefined })}>
+              <option value={1}>1 — previous image only (classic telephone)</option>
+              {Array.from({ length: maxFrames - 1 }, (_, k) => k + 2).map((n) => (
+                <option key={n} value={n}>{n} — the run's last {n} images, oldest first</option>
+              ))}
+            </select>
+            {(step.params.keyframes ?? 1) > 1 && (
+              <p className="mt-1 text-[11px] text-amber-300">
+                Deliberate exception to the telephone rule: this step also sees earlier images of the run, as keyframes.
+                {maxFrames === 2 ? ' For 3–5 keyframes pick the Pikaframes model.' : ''}
+              </p>
+            )}
+          </div>
+        )}
         <div>
           <label className="lbl">Resolution</label>
           <select className="inp mt-1" value={step.params.resolution ?? ''} onChange={(e) => set({ resolution: e.target.value || undefined })}>
             <option value="">(model default)</option>
-            <option value="480P">480P</option>
-            <option value="768P">768P</option>
+            {resolutions.map((r) => (
+              <option key={r} value={r}>{r}</option>
+            ))}
           </select>
         </div>
         <div>
@@ -146,6 +169,7 @@ function StepCard({
   step,
   index,
   total,
+  inRepeat,
   inputKind,
   issues,
   models,
@@ -159,6 +183,8 @@ function StepCard({
   step: StepDefinition;
   index: number;
   total: number;
+  /** times of the enclosing repeat block when this card is inside one started by an earlier card */
+  inRepeat: number;
   inputKind: ArtifactKind;
   issues: StepIssue[];
   models: ModelsView | null;
@@ -195,6 +221,36 @@ function StepCard({
         <span className="text-[11px] text-neutral-500">
           in: {t.input} · out: {t.output} · {t.provider}
         </span>
+        {inRepeat ? (
+          <span className="rounded bg-violet-950 px-1.5 py-0.5 text-[11px] text-violet-300">↻ in repeat ×{inRepeat}</span>
+        ) : (
+          <label className="flex items-center gap-1 text-[11px] text-neutral-400" title="Run this step and the ones after it several times in a row, without adding cards. Unrolled into ordinary steps when the run is created.">
+            ↻ repeat
+            <select
+              className="inp w-auto py-0.5"
+              value={step.repeat?.span ?? 0}
+              onChange={(e) => update({ repeat: Number(e.target.value) ? { span: Number(e.target.value), times: step.repeat?.times ?? 3 } : undefined })}
+            >
+              <option value={0}>off</option>
+              {Array.from({ length: Math.min(10, total - index) }, (_, k) => k + 1).map((n) => (
+                <option key={n} value={n}>{n === 1 ? 'this step' : `this + next ${n - 1}`}</option>
+              ))}
+            </select>
+            {step.repeat && (
+              <>
+                ×
+                <input
+                  type="number"
+                  min={2}
+                  max={50}
+                  className="inp w-14 py-0.5"
+                  value={step.repeat.times}
+                  onChange={(e) => update({ repeat: { span: step.repeat!.span, times: Math.max(2, Math.min(50, Number(e.target.value) || 2)) } })}
+                />
+              </>
+            )}
+          </label>
+        )}
         <div className="ml-auto flex gap-1">
           <button type="button" className="btn btn-xs" title="Move up" disabled={index === 0} onClick={() => move(-1)}>
             ↑
@@ -223,7 +279,18 @@ function StepCard({
 
       <div className="mt-2 grid gap-2 lg:grid-cols-2">
         <div className="space-y-2">
-          <ModelPicker type={step.type} value={step.modelId} models={models} onChange={(modelId) => update({ modelId })} onRefresh={onRefreshModels} refreshing={refreshing} />
+          <ModelPicker type={step.type} value={step.modelId} models={models} onChange={(modelId) => {
+            // keep video params valid for the newly chosen endpoint (resolutions and keyframe limits differ)
+            const params = { ...step.params };
+            const res = models?.models.find((m) => m.id === modelId)?.params?.resolution;
+            if (params.resolution && res && !res.includes(params.resolution)) params.resolution = res[0];
+            if (step.type === 'image_to_video') {
+              const max = KEYFRAME_MODELS[modelId] ?? 1;
+              const kf = Math.min(Math.max(params.keyframes ?? 1, modelId === PIKAFRAMES ? 2 : 1), max);
+              if (kf > 1) params.keyframes = kf; else delete params.keyframes;
+            }
+            update({ modelId, params });
+          }} onRefresh={onRefreshModels} refreshing={refreshing} />
           <ParamControls step={step} models={models} onChange={(params) => update({ params })} />
         </div>
         <div>
@@ -306,6 +373,15 @@ export default function PipelineEditor({
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   };
 
+  // For each card: the ×N of a repeat block opened by an EARLIER card that covers it (0 = none).
+  const repeatOf: number[] = editor.steps.map(() => 0);
+  for (let i = 0; i < editor.steps.length; ) {
+    const rep = editor.steps[i].repeat;
+    const span = rep ? Math.min(rep.span, editor.steps.length - i) : 1;
+    for (let j = 1; j < span; j++) repeatOf[i + j] = rep!.times;
+    i += span;
+  }
+  const expandedCount = expandRepeats(editor.steps).steps.length;
   const issuesFor = (index: number) => issues.filter((i) => i.index === index);
   const generalIssues = issues.filter((i) => i.index < 0 || i.index >= editor.steps.length);
 
@@ -314,7 +390,7 @@ export default function PipelineEditor({
       title="Pipeline editor"
       right={
         <span className="text-[11px] text-neutral-500">
-          {editor.steps.length} step{editor.steps.length === 1 ? '' : 's'}
+          {editor.steps.length} step{editor.steps.length === 1 ? '' : 's'}{expandedCount !== editor.steps.length ? ` → ${expandedCount} with repeats` : ''}
         </span>
       }
     >
@@ -428,9 +504,9 @@ export default function PipelineEditor({
       )}
       {importIssues && importIssues.length === 0 && <Banner kind="ok">Imported preset validated cleanly.</Banner>}
 
-      {editor.steps.length > 8 && (
+      {expandedCount > 8 && (
         <Banner kind="warn">
-          {editor.steps.length} steps: long chains cost more and take longer. Image and video generation dominate the wall clock — keep a live demo
+          {expandedCount} steps: long chains cost more and take longer. Image and video generation dominate the wall clock — keep a live demo
           short, or set a budget below.
         </Banner>
       )}
@@ -449,6 +525,7 @@ export default function PipelineEditor({
             key={s.id}
             step={s}
             index={i}
+            inRepeat={repeatOf[i]}
             total={editor.steps.length}
             inputKind={kindAfter(editor.startingKind, editor.steps, i)}
             issues={issuesFor(i)}

@@ -12,7 +12,7 @@ import { ModelCatalog, FAVORITES } from '../server/models.ts';
 import { OpenRouterAdapter } from '../server/providers/openrouter.ts';
 import { FalAdapter } from '../server/providers/fal.ts';
 import { inspectGeneratedImage, probeVideo } from '../server/media.ts';
-import { DEFAULT_INSTRUCTIONS, STEP_TYPES, type StepType } from '../shared/types.ts';
+import { PIKAFRAMES, DEFAULT_INSTRUCTIONS, STEP_TYPES, type StepType } from '../shared/types.ts';
 import type { StepInput } from '../server/providers/types.ts';
 
 const args = process.argv.slice(2);
@@ -45,12 +45,13 @@ for (const type of types) {
   for (const modelId of FAVORITES[type]) {
     if (only && !only.includes(modelId)) continue;
     const input: StepInput = STEP_TYPES[type].input === 'text' ? { kind: 'text', text: SCENE } : await sourceImage();
-    const params = type === 'text_to_image' ? { aspect_ratio: '16:9' } : type.endsWith('video') ? { resolution: '768P', duration: 5, prompt_expansion_mode: 'balanced' as const } : {};
+    const pika = modelId === PIKAFRAMES;
+    const params = pika ? { resolution: '720p', duration: 5, keyframes: 2 } : type === 'text_to_image' ? { aspect_ratio: '16:9' } : type.endsWith('video') ? { resolution: '768P', duration: 5, prompt_expansion_mode: 'balanced' as const } : {};
     const t0 = Date.now();
     process.stdout.write(`${type}  ${modelId} … `);
     try {
       const r = await adapters[STEP_TYPES[type].provider].execute({
-        type, modelId, instruction: DEFAULT_INSTRUCTIONS[type], params, input, signal: AbortSignal.timeout(900_000),
+        type, modelId, instruction: DEFAULT_INSTRUCTIONS[type], params, input, keyframes: pika && input.kind === 'image' ? [input] : undefined, signal: AbortSignal.timeout(900_000),
         onSubmitted: (i) => process.stdout.write(`[job ${i.requestId}] `),
       });
       const ms = Date.now() - t0;

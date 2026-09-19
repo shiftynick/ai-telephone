@@ -9,6 +9,11 @@ export type StepRequest = {
   params: StepParams;
   /** ONLY the immediate predecessor's primary artifact. Adapters receive nothing else about the run. */
   input: StepInput;
+  /**
+   * Opt-in keyframe video only (params.keyframes > 1): EARLIER images of the same run, oldest first. `input`
+   * is still the predecessor and is always the last keyframe. Absent for every other step.
+   */
+  keyframes?: { bytes: Buffer; mime: string }[];
   signal: AbortSignal;
   /** Called as soon as the provider has durably accepted an async job, before polling. */
   onSubmitted?: (info: { requestId: string; uploadRef?: string }) => void;

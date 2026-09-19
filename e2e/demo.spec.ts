@@ -50,6 +50,15 @@ test('host runs the quick demo; projector follows; phone page uploads', async ({
   await expect(projector.locator('video')).toBeVisible();
   await projector.screenshot({ path: path.join(shots, 'projector-video.png') });
 
+  // Autoplay (viewer-local): images only, skipping text and video, and Esc returns to the live stage.
+  await projector.getByRole('button', { name: /Autoplay/ }).click();
+  await expect(projector.getByText(/autoplay \d\/3/)).toBeVisible();
+  await expect(projector.locator('video')).toHaveCount(0);
+  await expect(projector.getByText(/autoplay 3\/3/)).toBeVisible({ timeout: 8000 });
+  await projector.screenshot({ path: path.join(shots, 'projector-autoplay.png') });
+  await projector.keyboard.press('Escape');
+  await expect(projector.locator('video')).toBeVisible();
+
   // A projector token cannot mutate anything.
   const status = await projector.evaluate(async () => (await fetch('/api/session/reveal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"action":"reset"}' })).status);
   expect(status).toBe(401);

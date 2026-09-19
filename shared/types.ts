@@ -27,12 +27,25 @@ export const STEP_TYPES: Record<
   text_to_video: { input: 'text', output: 'video', provider: 'fal', label: 'text → video' },
 };
 
+export const MAX_KEYFRAMES = 5;
+/** fal image → video endpoints that accept more than one image, and how many (schemas checked 2026-09-19). */
+export const KEYFRAME_MODELS: Record<string, number> = {
+  'minimax/h3-max-turbo/image-to-video': 2, // image_url (first frame) + end_image_url (last frame)
+  'fal-ai/pika/v2.2/pikaframes': 5, // image_urls: ordered keyframes
+};
+export const PIKAFRAMES = 'fal-ai/pika/v2.2/pikaframes';
+
 export const StepParams = z
   .object({
     aspect_ratio: z.string().max(12).optional(),
     resolution: z.string().max(8).optional(),
     duration: z.number().int().min(5).max(15).optional(),
     prompt_expansion_mode: z.enum(['disabled', 'balanced', 'quality']).optional(),
+    /**
+     * image → video only, opt-in: how many of the run's most recent images (the predecessor included) are
+     * sent as keyframes. A deliberate, visible exception to the predecessor-only rule. Absent/1 = classic.
+     */
+    keyframes: z.number().int().min(1).max(MAX_KEYFRAMES).optional(),
   })
   .strict();
 export type StepParams = z.infer<typeof StepParams>;
@@ -45,6 +58,11 @@ export const StepDefinition = z.object({
   params: StepParams.default({}),
   /** True when the app added this step itself (a bridge between the source and the pipeline). Always visible, never hidden. */
   auto: z.boolean().optional(),
+  /**
+   * Editor shorthand: run this step and the following `span - 1` steps `times` times in a row. Expanded
+   * into ordinary flat steps when a run is created, so a run's snapshot never contains it.
+   */
+  repeat: z.object({ span: z.number().int().min(1).max(10), times: z.number().int().min(2).max(50) }).optional(),
 });
 export type StepDefinition = z.infer<typeof StepDefinition>;
 
@@ -59,22 +77,52 @@ export type Preset = PresetBody & { id: string; updatedAt: number; builtin?: boo
 
 export type StepIssue = { index: number; message: string };
 
-/** Adjacency validation. Never repairs anything; only explains. */
-export function validateChain(startingKind: ArtifactKind, steps: { type: StepType }[]): StepIssue[] {
+export const MAX_EXPANDED_STEPS = 200;
+
+/** Unroll repeat blocks into flat steps. `origin[i]` is the index of the card that expanded step i came from. */
+export function expandRepeats<T extends { type: StepType; id?: string; repeat?: { span: number; times: number } }>(steps: T[]) {
+  const out: T[] = [];
+  const origin: number[] = [];
+  const loopStart: boolean[] = []; // first step of a 2nd+ pass through a block
   const issues: StepIssue[] = [];
+  for (let i = 0; i < steps.length; ) {
+    const rep = steps[i].repeat;
+    const span = rep ? Math.min(rep.span, steps.length - i) : 1;
+    const times = rep ? rep.times : 1;
+    for (let j = 1; j < span; j++) if (steps[i + j].repeat) issues.push({ index: i + j, message: 'Repeat blocks cannot overlap: this step is already inside the repeat that starts at step ' + (i + 1) + '.' });
+    for (let k = 0; k < times; k++)
+      for (let j = 0; j < span; j++) {
+        const { repeat: _r, ...rest } = steps[i + j];
+        out.push((k > 0 && rest.id ? { ...rest, id: `${rest.id}~${k + 1}` } : rest) as T);
+        origin.push(i + j);
+        loopStart.push(k > 0 && j === 0);
+      }
+    i += span;
+  }
+  if (out.length > MAX_EXPANDED_STEPS) issues.push({ index: 0, message: `Repeats expand to ${out.length} steps; the limit is ${MAX_EXPANDED_STEPS}.` });
+  return { steps: out, origin, loopStart, issues };
+}
+
+/** Adjacency validation (repeat blocks are unrolled first). Never repairs anything; only explains. */
+export function validateChain(startingKind: ArtifactKind, steps: { type: StepType; repeat?: { span: number; times: number } }[]): StepIssue[] {
+  const ex = expandRepeats(steps);
+  const issues: StepIssue[] = [...ex.issues];
+  const seen = new Set<string>();
   let prev: ArtifactKind = startingKind;
-  steps.forEach((s, index) => {
+  ex.steps.forEach((s, i) => {
+    const index = ex.origin[i];
+    const push = (message: string) => {
+      if (!seen.has(`${index}|${message}`)) issues.push({ index, message });
+      seen.add(`${index}|${message}`);
+    };
     const t = STEP_TYPES[s.type];
-    if (!t) {
-      issues.push({ index, message: `Unknown step type "${s.type}".` });
-      return;
-    }
+    if (!t) return push(`Unknown step type "${s.type}".`);
     if (t.input !== prev) {
-      const from = index === 0 ? 'the starting input' : `step ${index}`;
-      issues.push({
-        index,
-        message: `"${t.label}" needs a ${t.input}, but ${from} produces a ${prev}. Insert an explicit step that turns ${prev} into ${t.input}; nothing is converted automatically.`,
-      });
+      if (ex.loopStart[i]) push(`This repeat block cannot loop: it ends with a ${prev} but starts with "${t.label}", which needs a ${t.input}.`);
+      else {
+        const from = i === 0 ? 'the starting input' : `step ${ex.origin[i - 1] + 1}`;
+        push(`"${t.label}" needs a ${t.input}, but ${from} produces a ${prev}. Insert an explicit step that turns ${prev} into ${t.input}; nothing is converted automatically.`);
+      }
     }
     prev = t.output;
   });
@@ -170,6 +218,19 @@ export const INSTRUCTION_SETS: InstructionSet[] = [
       text_to_text: 'Retell the following as the opening paragraph of a short story, in 80–120 words, keeping its characters, objects, and setting. Return only the paragraph.',
       image_to_video: 'Bring this scene to life as a short cinematic shot: expressive movement, atmospheric light, and a slow, deliberate camera move. Keep the same subjects and setting. No cuts or title cards.',
       text_to_video: 'Film the following as a short cinematic shot that captures its mood.',
+    },
+  },
+  {
+    id: 'storyboard',
+    name: 'Storyboard (what happens next)',
+    description: 'Each description is of the NEXT frame, not the current one, so the chain walks through a story. An experiment: change is the point.',
+    experiment: true,
+    instructions: {
+      image_to_text: `This image is one frame of a storyboard. Imagine what happens a few moments later and describe the NEXT frame of the story. Keep the same characters, setting, and visual style, but let the action clearly move forward by one beat. Describe that next frame as a complete standalone image, because the artist will not see this one: subjects and their appearance, what they are now doing, objects, positions, setting, colours, lighting, and visual style. One paragraph of about 80–120 words. Do not mention the current frame or use words like "next" or "now". Return only the description. ${GUARD}`,
+      text_to_image: 'Draw the following storyboard frame as one image. Preserve the described characters, their appearance, the setting, and the visual style exactly. No captions, borders, panels, or frame numbers.',
+      text_to_text: 'The following describes one frame of a story. Write the description of the frame that comes next, keeping the same characters, setting, and style, as a complete standalone description in one paragraph of 80–120 words. Return only the description.',
+      image_to_video: 'Animate this storyboard as one continuous shot in which the story moves forward. Keep the same characters, setting, and style. No scene cuts or title cards.',
+      text_to_video: 'Film the following storyboard frame as one continuous shot in which the action moves forward.',
     },
   },
   {

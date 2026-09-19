@@ -1,12 +1,12 @@
 import { type DB, kvGet, kvSet, now } from './db.ts';
 import { FAL_ENDPOINTS } from './providers/fal.ts';
-import { STEP_TYPES, type ModelEntry, type ModelsView, type StepDefinition, type StepType } from '../shared/types.ts';
+import { KEYFRAME_MODELS, PIKAFRAMES, STEP_TYPES, type ModelEntry, type ModelsView, type StepDefinition, type StepType } from '../shared/types.ts';
 
 export const FAVORITES: Record<StepType, string[]> = {
   image_to_text: ['google/gemini-3.8-flash', 'openai/gpt-4.1-mini', 'anthropic/claude-sonnet-4.6', 'google/gemini-2.5-flash'],
   text_to_text: ['google/gemini-3.8-flash', 'openai/gpt-4.1-mini', 'anthropic/claude-sonnet-4.6'],
   text_to_image: ['google/gemini-3.1-flash-lite-image', 'google/gemini-3.1-flash-image', 'openai/gpt-image-2.5-flare', 'bytedance-seed/seedream-4.5'],
-  image_to_video: [FAL_ENDPOINTS.image_to_video],
+  image_to_video: [FAL_ENDPOINTS.image_to_video, PIKAFRAMES],
   text_to_video: [FAL_ENDPOINTS.text_to_video],
 };
 
@@ -107,6 +107,7 @@ export class ModelCatalog {
     }
     const falParams = { resolution: ['480P', '768P'] };
     add(FAL_ENDPOINTS.image_to_video, 'MiniMax H3 Max Turbo (image → video)', 'fal', 'image_to_video', 'fal endpoint schema (built-in adapter)', falParams);
+    add(PIKAFRAMES, 'Pika 2.2 Pikaframes (2–5 keyframes → video)', 'fal', 'image_to_video', 'fal endpoint schema (built-in adapter)', { resolution: ['720p', '1080p'] });
     add(FAL_ENDPOINTS.text_to_video, 'MiniMax H3 Max Turbo (text → video)', 'fal', 'text_to_video', 'fal endpoint schema (built-in adapter)', falParams);
     const models = [...byId.values()].sort((a, b) => Number(b.favorite) - Number(a.favorite) || a.id.localeCompare(b.id));
     return { refreshedAt: c?.updatedAt ?? null, stale: !c || now() - c.updatedAt > STALE_MS || !!this.lastError, error: this.lastError, models };
@@ -129,6 +130,13 @@ export class ModelCatalog {
       if (!allowed) return `Model "${def.modelId}" does not accept "${key}".`;
       if (!allowed.includes(val)) return `"${key}: ${val}" is not supported by ${def.modelId} (allowed: ${allowed.join(', ')}).`;
     }
+    const kf = def.params?.keyframes;
+    if (kf !== undefined && kf > 1) {
+      if (def.type !== 'image_to_video') return 'Keyframes only apply to image → video steps.';
+      const max = KEYFRAME_MODELS[def.modelId] ?? 1;
+      if (kf > max) return `${def.modelId} accepts at most ${max} keyframe image${max === 1 ? '' : 's'}${max < 5 ? `; use ${PIKAFRAMES} for up to 5` : ''}.`;
+    }
+    if (def.modelId === PIKAFRAMES && (kf ?? 1) < 2) return 'Pikaframes needs "keyframes" set to 2–5.';
     if (t.provider !== 'fal' && (def.params?.duration !== undefined || def.params?.prompt_expansion_mode !== undefined)) return 'duration/prompt expansion only apply to video steps.';
     return null;
   }

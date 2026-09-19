@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FASTEST_MODELS, INSTRUCTION_SETS, NEXT_ACTIONS, PRESET_SCHEMA_VERSION, type ModelsView, type ArtifactKind, type ArtifactView, type PresentStage, type PresentState, type RunView, type StepType } from '../../shared/types.ts';
+import { FASTEST_MODELS, INSTRUCTION_SETS, KEYFRAME_MODELS, MAX_KEYFRAMES, PIKAFRAMES, NEXT_ACTIONS, PRESET_SCHEMA_VERSION, type ModelsView, type ArtifactKind, type ArtifactView, type PresentStage, type PresentState, type RunView, type StepType } from '../../shared/types.ts';
 import { ALLOWED_ACTIONS, ApiError, api, mediaUrl, type RevealAction, type RunAction, type SourceCandidate } from './api.ts';
 import { cx, fmtDuration, fmtMoney } from './util.tsx';
 
-function VideoStage({ src, poster }: { src: string; poster?: string }) {
+function VideoStage({ src, poster, autoPlay }: { src: string; poster?: string; autoPlay?: boolean }) {
   const ref = useRef<HTMLVideoElement | null>(null);
   const [playing, setPlaying] = useState(false);
   // Detaching the element is not enough in every browser: pause it and drop the source so no
@@ -26,6 +26,9 @@ function VideoStage({ src, poster }: { src: string; poster?: string }) {
         poster={poster}
         controls
         loop
+        // slideshow only: browsers allow autoplay when muted
+        autoPlay={autoPlay}
+        muted={autoPlay}
         playsInline
         preload="auto"
         className="h-full w-full object-contain"
@@ -48,7 +51,7 @@ function VideoStage({ src, poster }: { src: string; poster?: string }) {
   );
 }
 
-function StageArtifact({ a, token, label }: { a: ArtifactView; token: string; label?: string }) {
+function StageArtifact({ a, token, label, autoPlay }: { a: ArtifactView; token: string; label?: string; autoPlay?: boolean }) {
   if (a.kind === 'text')
     return (
       <div className="fade-in flex h-full w-full items-center justify-center px-[4vw]">
@@ -60,7 +63,7 @@ function StageArtifact({ a, token, label }: { a: ArtifactView; token: string; la
         </p>
       </div>
     );
-  if (a.kind === 'video') return <VideoStage src={mediaUrl(a.id, token)} />;
+  if (a.kind === 'video') return <VideoStage src={mediaUrl(a.id, token)} autoPlay={autoPlay} />;
   return (
     <img
       key={a.id}
@@ -70,6 +73,9 @@ function StageArtifact({ a, token, label }: { a: ArtifactView; token: string; la
     />
   );
 }
+
+const SPEEDS = [0.3, 0.5, 1, 2, 3, 5, 8];
+type SlideFilter = 'all' | 'image' | 'text';
 
 const ACTION_LABEL: Record<StepType, string> = {
   image_to_text: '📝 Describe it',
@@ -178,6 +184,11 @@ export default function Present({ token }: { token: string }) {
     api.models().then((m) => alive && setModels(m), () => {});
     return () => { alive = false; };
   }, [isHost]);
+  // Autoplay: a viewer-local slideshow over the REVEALED stages. Nothing is sent to the server.
+  const [autoOn, setAutoOn] = useState(false);
+  const [autoFilter, setAutoFilter] = useState<SlideFilter>(() => (localStorage.getItem('tele.autoFilter') as SlideFilter) || 'image');
+  const [autoSec, setAutoSec] = useState(() => Number(localStorage.getItem('tele.autoSec')) || 2);
+  const [advFrames, setAdvFrames] = useState(1);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const [bottomH, setBottomH] = useState(0);
 
@@ -332,7 +343,36 @@ export default function Present({ token }: { token: string }) {
   const startChooser = startOpen && isHost ? <AdventureStart busy={busy} onPick={beginFrom} onText={beginFromText} onFile={beginFromFile} onClose={() => setStartOpen(false)} /> : null;
 
   // When the host moves the stage, the projector follows again.
-  useEffect(() => setDetailStage(null), [state?.currentStage, state?.compare]);
+  const autoRef = useRef(false);
+  autoRef.current = autoOn;
+  useEffect(() => { if (!autoRef.current) setDetailStage(null); }, [state?.currentStage, state?.compare]);
+
+  const slides = (state?.stages ?? []).filter((s) => s.revealed && s.artifact && (autoFilter === 'all' || s.kind === autoFilter));
+  const slidesKey = slides.map((s) => s.stage).join(',');
+  useEffect(() => {
+    if (!autoOn) return;
+    if (!slides.length) return setAutoOn(false);
+    const at = slides.find((s) => s.stage === detailStage);
+    const next = (slides.find((s) => s.stage > (detailStage ?? -1)) ?? slides[0]).stage;
+    // a video gets at least its own length; everything else the chosen speed
+    const dwell = at ? Math.max(autoSec, at.kind === 'video' ? (at.artifact?.durationSec ?? 0) : 0) * 1000 : 0;
+    const t = setTimeout(() => setDetailStage(next), dwell);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOn, autoSec, slidesKey, detailStage]);
+  // Fast speeds only look right when the images are already in the browser cache.
+  useEffect(() => {
+    if (!autoOn) return;
+    for (const s of slides) if (s.kind === 'image' && s.artifact) new Image().src = mediaUrl(s.artifact.id, token);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOn, slidesKey, token]);
+  const stopAuto = () => { setAutoOn(false); setDetailStage(null); };
+  const speed = (dir: -1 | 1) => setAutoSec((cur) => {
+    const i = SPEEDS.indexOf(cur);
+    const v = SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, (i < 0 ? 3 : i) - dir))]; // faster = shorter dwell
+    localStorage.setItem('tele.autoSec', String(v));
+    return v;
+  });
 
   // ← / → flip through REVEALED stages locally; Esc returns to the host's stage.
   useEffect(() => {
@@ -340,7 +380,10 @@ export default function Present({ token }: { token: string }) {
       if (!state?.hasRun) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
-      if (e.key === 'Escape') return setDetailStage(null);
+      if (e.key === 'Escape') return stopAuto();
+      if (e.key === ' ') { e.preventDefault(); return autoOn ? stopAuto() : setAutoOn(true); }
+      if (e.key === '+' || e.key === '=') return speed(1);
+      if (e.key === '-') return speed(-1);
       if (e.key === 'c' && isHost) return setPinned((p) => !p);
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
       if (isHost && detailStage === null) return void reveal({ action: e.key === 'ArrowRight' ? 'next' : 'prev' });
@@ -352,7 +395,7 @@ export default function Present({ token }: { token: string }) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [state, detailStage, isHost, reveal]);
+  }, [state, detailStage, isHost, reveal, autoOn]);
 
   const running = state?.stages.some((s) => s.status === 'running');
   useEffect(() => {
@@ -416,7 +459,9 @@ export default function Present({ token }: { token: string }) {
   const choose = (type: StepType) => guarded(async () => {
     if (!onScreen?.artifact) return;
     const target = atTip && run ? run.id : (await newAdventure(onScreen.artifact.id, onScreen.kind)).id;
-    setRun(await api.appendStep(target, type, { twist: twist.trim() || undefined, instructionSet: advSet, modelId: advModels[type] || undefined }));
+    setRun(await api.appendStep(target, type, { twist: twist.trim() || undefined, instructionSet: advSet, modelId: type === 'image_to_video' && advFrames > (KEYFRAME_MODELS[advModels[type] || FASTEST_MODELS[type]] ?? 1) ? PIKAFRAMES : advModels[type] || undefined,
+      keyframes: type === 'image_to_video' ? advFrames : undefined,
+    }));
     setTwist('');
     setDetailStage(null);
   });
@@ -583,6 +628,18 @@ export default function Present({ token }: { token: string }) {
                     </span>
                   );
                 })}
+                {actions.includes('image_to_video') && (
+                  <select
+                    value={advFrames}
+                    onChange={(e) => setAdvFrames(Number(e.target.value))}
+                    title="Keyframes for Animate it: also send the run's earlier images as keyframes (oldest first). 3+ uses Pika Pikaframes. A deliberate exception to the telephone rule."
+                    className={cx('rounded border bg-neutral-900 px-[0.4vw] py-[0.45vh]', advFrames > 1 ? 'border-amber-600 text-amber-200' : 'border-neutral-700 text-neutral-100')}
+                  >
+                    {Array.from({ length: MAX_KEYFRAMES }, (_, k) => k + 1).map((n) => (
+                      <option key={n} value={n}>{n === 1 ? '🎞 1 frame' : `🎞 ${n} keyframes`}</option>
+                    ))}
+                  </select>
+                )}
                 <select
                   value={advSet}
                   onChange={(e) => setAdvSet(e.target.value)}
@@ -610,6 +667,30 @@ export default function Present({ token }: { token: string }) {
 
       {/* step bar: always visible, above the detail view, for flipping through revealed steps */}
       <div className="relative z-30 flex items-stretch gap-[0.5vw] overflow-x-auto bg-[#0a0a0a] px-[2vw] pt-[0.8vh] pb-[1.6vh]">
+        <div className="flex shrink-0 items-stretch gap-[0.3vw]" style={{ fontSize: 'clamp(9px, 0.85vw, 16px)' }}>
+          <button
+            type="button"
+            className={cx('pbtn', autoOn && 'pbtn-on')}
+            disabled={!autoOn && slides.length < 2}
+            title="Autoplay through the revealed steps (Space). Local to this window."
+            onClick={() => (autoOn ? stopAuto() : setAutoOn(true))}
+          >
+            {autoOn ? '⏸' : '▶'} Autoplay
+          </button>
+          <select
+            value={autoFilter}
+            title="Which steps autoplay shows"
+            onChange={(e) => { localStorage.setItem('tele.autoFilter', e.target.value); setAutoFilter(e.target.value as SlideFilter); }}
+            className="rounded border border-neutral-700 bg-neutral-900 px-[0.3vw] text-neutral-300"
+          >
+            <option value="image">images only</option>
+            <option value="text">text only</option>
+            <option value="all">everything</option>
+          </select>
+          <button type="button" className="pbtn" title="Slower (−)" onClick={() => speed(-1)}>−</button>
+          <span className="flex min-w-[3.2vw] items-center justify-center font-mono text-neutral-300" title="Seconds per step">{autoSec}s</span>
+          <button type="button" className="pbtn" title="Faster (+)" onClick={() => speed(1)}>+</button>
+        </div>
         {stages.map((s) => {
           const isHostStage = s.stage === state.currentStage && !state.compare;
           const isViewing = detail ? detail.stage === s.stage : isHostStage;
@@ -627,7 +708,7 @@ export default function Present({ token }: { token: string }) {
               disabled={!s.revealed}
               // long adventures scroll sideways: keep the step being shown in view
               ref={isViewing ? (el) => el?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) : undefined}
-              onClick={() => setDetailStage(detail?.stage === s.stage ? null : s.stage)}
+              onClick={() => { setAutoOn(false); setDetailStage(detail?.stage === s.stage ? null : s.stage); }}
               title={s.revealed ? `${s.label} — view with its exact instruction (←/→ to flip, Esc to return)` : 'not revealed yet'}
               className={cx('min-w-[7vw] flex-1 truncate rounded px-[0.4vw] py-[0.6vh] text-center transition-colors', tone, isViewing && 'ring-2 ring-sky-400', s.revealed && 'cursor-pointer')}
               style={{ fontSize: 'clamp(9px, 0.85vw, 16px)' }}
@@ -646,7 +727,7 @@ export default function Present({ token }: { token: string }) {
         <div
           className="absolute inset-x-0 top-0 z-20 flex flex-col bg-[#050505] px-[3vw] pt-[3vh] pb-[1vh]"
           style={{ bottom: bottomH }} // measured: clears the step bar and any control rows
-          onClick={() => setDetailStage(null)}
+          onClick={stopAuto}
         >
           <div className="mb-[1.5vh] flex items-baseline gap-[1.5vw]">
             <span className="text-neutral-100" style={{ fontSize: 'clamp(14px, 1.6vw, 28px)' }}>
@@ -656,13 +737,13 @@ export default function Present({ token }: { token: string }) {
               {detail.modelId ?? ''}
             </span>
             <span className="ml-auto text-neutral-500" style={{ fontSize: 'clamp(10px, 1vw, 18px)' }}>
-              ←/→ flip · Esc or click to return to the live stage
+              {autoOn ? `autoplay ${slides.findIndex((x) => x.stage === detail.stage) + 1}/${slides.length} · ${autoSec}s · Space or Esc to stop` : '←/→ flip · Esc or click to return to the live stage'}
             </span>
           </div>
           <div className="min-h-0 flex-1" onClick={(e) => e.stopPropagation()}>
-            <StageArtifact key={detail.artifact.id} a={detail.artifact} token={token} />
+            <StageArtifact key={detail.artifact.id} a={detail.artifact} token={token} autoPlay={autoOn} />
           </div>
-          {detail.instruction && (
+          {detail.instruction && !autoOn && (
             <div
               className="mt-[1.5vh] max-h-[22vh] overflow-y-auto rounded border border-neutral-800 bg-neutral-950 p-[1vw] text-neutral-300"
               style={{ fontSize: 'clamp(10px, 1vw, 18px)' }}

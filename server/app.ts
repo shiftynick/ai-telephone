@@ -18,7 +18,7 @@ import { OpenRouterAdapter } from './providers/openrouter.ts';
 import { FalAdapter } from './providers/fal.ts';
 import { MockAdapter } from './providers/mock.ts';
 import type { Adapters } from './providers/types.ts';
-import { PresetBody, STEP_TYPES, StepDefinition, StepType, bridgeType, instructionSet, validateChain, type StepIssue } from '../shared/types.ts';
+import { MAX_KEYFRAMES, PIKAFRAMES, PresetBody, STEP_TYPES, StepDefinition, StepType, bridgeType, instructionSet, validateChain, type StepIssue } from '../shared/types.ts';
 
 const HOST_COOKIE = 'tele_host';
 const HOST_SESSION_MS = 12 * 3600_000;
@@ -287,10 +287,16 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
   // tested model for the type; an optional twist is appended to the static instruction.
   app.post('/api/runs/:id/steps', { preHandler: requireHost }, async (req, reply) => {
     const id = (req.params as any).id;
-    const b = z.object({ type: StepType, twist: z.string().trim().max(500).optional(), modelId: z.string().min(1).max(200).optional(), instructionSet: z.string().max(40).optional() }).parse(req.body);
+    const b = z.object({ type: StepType, twist: z.string().trim().max(500).optional(), modelId: z.string().min(1).max(200).optional(), instructionSet: z.string().max(40).optional(), keyframes: z.number().int().min(1).max(MAX_KEYFRAMES).optional() }).parse(req.body);
     const iset = b.instructionSet ? instructionSet(b.instructionSet) : null;
     if (b.instructionSet && !iset) return reply.code(400).send({ error: `Unknown instruction set "${b.instructionSet}".` });
     const def = defaultStep(b.type, { ...(b.modelId ? { modelId: b.modelId } : {}), ...(iset ? { instruction: iset.instructions[b.type] } : {}) });
+    // Keyframe video (opt-in): more than two frames needs the Pikaframes endpoint, which has its own resolutions.
+    if (b.type === 'image_to_video' && (b.keyframes ?? 1) > 1) {
+      if (!b.modelId && b.keyframes! > 2) def.modelId = PIKAFRAMES;
+      def.params = { ...def.params, keyframes: b.keyframes };
+    }
+    if (def.modelId === PIKAFRAMES) def.params = { ...def.params, resolution: '720p' };
     if (b.twist) def.instruction = [def.instruction, `Additional direction: ${b.twist}`].filter(Boolean).join('\n\n');
     const problem = catalog.validateStep(def);
     if (problem) return reply.code(400).send({ error: problem });

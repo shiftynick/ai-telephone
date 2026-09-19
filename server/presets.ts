@@ -32,9 +32,9 @@ export function builtinPresets(): { id: string; body: PresetBody }[] {
   return [
     p('builtin_quick', 'Quick demo', [describe(), draw(), describe(), draw(), animate()]),
     p('builtin_cross', 'Cross-model telephone', [describe(GEMINI), draw(LITE_IMAGE), describe('openai/gpt-4.1-mini'), draw('openai/gpt-image-2.5-flare'), animate()]),
-    p('builtin_long', 'Long game', [describe(), draw(), describe(), draw(), describe(), draw(), animate()]),
-    // 10 describe/generate pairs, fastest tested model per step, no video: the drift experiment at length.
-    p('builtin_verylong', 'Very long game (20 steps, no video)', Array.from({ length: 10 }, () => [describe(FAST), draw(LITE_IMAGE)]).flat()),
+    p('builtin_long', 'Long game', [describe(FAST, { repeat: { span: 2, times: 3 } }), draw(), animate()]),
+    // One describe/generate pair repeated ×10 (a repeat block), fastest tested model per step, no video: the drift experiment at length.
+    p('builtin_verylong', 'Very long game (20 steps, no video)', [describe(FAST, { repeat: { span: 2, times: 10 } }), draw(LITE_IMAGE)]),
     p('builtin_caption', 'Caption bottleneck (intentionally lossy)', [describe(FAST, { instruction: CAPTION }), draw(), describe(FAST, { instruction: CAPTION }), draw(), animate()]),
   ];
 }

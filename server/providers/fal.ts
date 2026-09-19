@@ -1,6 +1,7 @@
 import { createFalClient } from '@fal-ai/client';
 import { sha256 } from '../db.ts';
 import { safeDownload, MediaError } from '../media.ts';
+import { PIKAFRAMES } from '../../shared/types.ts';
 import { ProviderError, scrub, type StepAdapter, type StepRequest, type StepResult } from './types.ts';
 
 export const FAL_ENDPOINTS = {
@@ -70,7 +71,8 @@ export class FalAdapter implements StepAdapter {
   async execute(req: StepRequest): Promise<StepResult> {
     if (!this.opts.apiKey && !this.opts.client) throw new ProviderError('auth', 'FAL_KEY is not configured in .env');
     const endpoint = req.modelId;
-    const input: Record<string, unknown> = {
+    const pika = endpoint === PIKAFRAMES;
+    const input: Record<string, unknown> = pika ? { resolution: req.params.resolution ?? '720p' } : {
       duration: req.params.duration ?? 5,
       resolution: req.params.resolution ?? '768P',
       prompt_expansion_mode: req.params.prompt_expansion_mode ?? 'balanced',
@@ -81,13 +83,28 @@ export class FalAdapter implements StepAdapter {
     if (req.type === 'image_to_video') {
       if (req.input.kind !== 'image') throw new ProviderError('unsupported', 'image_to_video requires an image input');
       input.prompt = req.instruction;
+      // Oldest first; the predecessor is always the final frame.
+      const frames = [...(req.keyframes ?? []), { bytes: req.input.bytes, mime: req.input.mime }];
+      if (pika && frames.length < 2) throw new ProviderError('unsupported', 'Pikaframes needs at least two images in the run; this run has only one so far.');
+      if (!pika && frames.length > 2) frames.splice(0, frames.length - 2);
+      const urls: string[] = [];
       try {
-        uploadRef = await this.client.upload(req.input.bytes, req.input.mime);
+        for (const f of frames) urls.push(await this.client.upload(f.bytes, f.mime));
       } catch (e) {
         throw this.classify(e, 'upload');
       }
-      input.image_url = uploadRef;
-      snapshotInput = { image_sha256: sha256(req.input.bytes), provider_upload_ref: uploadRef };
+      uploadRef = urls[urls.length - 1];
+      if (pika) {
+        input.image_urls = urls;
+        const per = Math.max(1, Math.round((req.params.duration ?? 5) / (urls.length - 1)));
+        input.transitions = urls.slice(1).map(() => ({ duration: per }));
+      } else if (urls.length === 2) {
+        input.image_url = urls[0];
+        input.end_image_url = urls[1];
+      } else input.image_url = urls[0];
+      snapshotInput = frames.length > 1
+        ? { keyframe_sha256: frames.map((f) => sha256(f.bytes)), provider_upload_refs: urls }
+        : { image_sha256: sha256(req.input.bytes), provider_upload_ref: uploadRef };
     } else if (req.type === 'text_to_video') {
       if (req.input.kind !== 'text') throw new ProviderError('unsupported', 'text_to_video requires a text input');
       input.prompt = [req.instruction.trim(), req.input.text].filter(Boolean).join('\n\n');
@@ -102,7 +119,7 @@ export class FalAdapter implements StepAdapter {
       throw this.classify(e, 'submit');
     }
     req.onSubmitted?.({ requestId, uploadRef });
-    const snapshot = { endpoint, ...input, image_url: undefined, input: snapshotInput };
+    const snapshot = { endpoint, ...input, image_url: undefined, end_image_url: undefined, image_urls: undefined, input: snapshotInput };
     return this.await(endpoint, requestId, req, snapshot);
   }
 

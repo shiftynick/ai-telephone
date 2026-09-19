@@ -3,7 +3,7 @@ import type { ArtifactStore, ArtifactRow } from './artifacts.ts';
 import type { Config } from './config.ts';
 import { inspectGeneratedImage, probeVideo, MediaError } from './media.ts';
 import { ProviderError, scrub, type Adapters, type StepInput, type StepResult } from './providers/types.ts';
-import { STEP_TYPES, validateChain, type AttemptView, type PresetBody, type RunStatus, type RunView, type StepDefinition, type StepView } from '../shared/types.ts';
+import { STEP_TYPES, expandRepeats, validateChain, type AttemptView, type PresetBody, type RunStatus, type RunView, type StepDefinition, type StepView } from '../shared/types.ts';
 import type { EventBus } from './events.ts';
 
 type RunRow = {
@@ -45,7 +45,8 @@ export class Runner {
     if (issues.length) throw new RunError(400, `Step ${issues[0].index + 1}: ${issues[0].message}`);
     const id = newId('run');
     // Immutable snapshot: later preset edits never affect this run.
-    const snapshot: PresetBody = JSON.parse(JSON.stringify({ ...opts.preset, startingKind: src.kind }));
+    // Repeat blocks are unrolled here, so the snapshot is always a flat list of ordinary steps.
+    const snapshot: PresetBody = JSON.parse(JSON.stringify({ ...opts.preset, startingKind: src.kind, steps: expandRepeats(opts.preset.steps).steps }));
     tx(this.db, () => {
       this.db.prepare('INSERT INTO runs(id, name, snapshot, source_artifact_id, status, budget_usd, interactive, created_at) VALUES(?,?,?,?,?,?,?,?)')
         .run(id, opts.name ?? opts.preset.name, JSON.stringify(snapshot), src.id, 'ready', opts.budgetUsd, Number(!!opts.interactive), now());
@@ -205,6 +206,18 @@ export class Runner {
     throw new ProviderError('unsupported', 'Video inputs are not supported in this build (video understanding was out of scope).');
   }
 
+  /**
+   * Opt-in keyframe video: the run's most recent images BEFORE the predecessor, oldest first. This is the one
+   * deliberate exception to predecessor-only input, and only when the step's `keyframes` param asks for it.
+   */
+  private earlierKeyframes(r: RunRow, def: StepDefinition, i: number): { bytes: Buffer; mime: string }[] | undefined {
+    const want = def.type === 'image_to_video' ? (def.params?.keyframes ?? 1) : 1;
+    if (want <= 1) return undefined;
+    const ids = [r.source_artifact_id, ...(this.db.prepare('SELECT artifact_id FROM step_executions WHERE run_id = ? AND step_index < ? ORDER BY step_index').all(r.id, i - 1) as any[]).map((x) => x.artifact_id)];
+    const images = ids.map((id) => (id ? this.store.get(id) : null)).filter((a): a is ArtifactRow => !!a && a.kind === 'image');
+    return images.slice(-(want - 1)).map((a) => ({ bytes: this.store.readBytes(a), mime: a.mime ?? 'image/jpeg' }));
+  }
+
   private async executeStep(r: RunRow, def: StepDefinition, i: number, signal: AbortSignal): Promise<boolean> {
     const stx = this.db.prepare('SELECT * FROM step_executions WHERE run_id = ? AND step_index = ?').get(r.id, i) as any;
     const predId: string = i === 0 ? r.source_artifact_id : (this.db.prepare('SELECT artifact_id FROM step_executions WHERE run_id = ? AND step_index = ?').get(r.id, i - 1) as any).artifact_id;
@@ -243,7 +256,7 @@ export class Runner {
         };
         const result: StepResult = resumable && autoRetry === 0
           ? await adapter.resume!({ ...common, requestId: prior.provider_request_id })
-          : await adapter.execute({ ...common, input: this.buildInput(pred) });
+          : await adapter.execute({ ...common, input: this.buildInput(pred), keyframes: this.earlierKeyframes(r, def, i) });
         const artifact = await this.persist(result, attemptId);
         tx(this.db, () => {
           this.db.prepare("UPDATE attempts SET status = 'succeeded', finished_at = ?, usage = ?, cost_usd = ?, cost_status = ?, provider_model = ?, provider_name = ?, provider_request_id = COALESCE(?, provider_request_id), expanded_prompt = ?, inference_sec = ?, request_snapshot = ? WHERE id = ?")
