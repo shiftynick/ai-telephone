@@ -276,7 +276,7 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
     }
     // Same pipeline, different words: swap ONLY the static instruction of every step (bridge included).
     // The saved preset is untouched; the run's snapshot records exactly what was sent.
-    if (iset) steps = steps.map((st) => ({ ...st, instruction: iset.instructions[st.type] }));
+    if (iset) steps = steps.map((st) => ({ ...st, instruction: iset.instructions[st.type], ...(iset.reference && st.type === 'text_to_image' && !st.params?.reference ? { params: { ...st.params, reference: iset.reference } } : {}) }));
     const issues = chainIssues({ startingKind: src.kind as any, steps });
     if (issues.length) return reply.code(400).send({ error: `Step ${issues[0].index + 1 - Number(bridged)}: ${issues[0].message}`, issues });
     const id = runner.createRun({ preset: { ...b.preset, steps }, name: iset && iset.id !== 'faithful' ? `${b.preset.name} [${iset.name}]` : undefined, sourceArtifactId: sourceId, budgetUsd: b.budgetUsd === undefined ? cfg.defaultBudgetUsd : b.budgetUsd, interactive: b.interactive });
@@ -287,10 +287,13 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
   // tested model for the type; an optional twist is appended to the static instruction.
   app.post('/api/runs/:id/steps', { preHandler: requireHost }, async (req, reply) => {
     const id = (req.params as any).id;
-    const b = z.object({ type: StepType, twist: z.string().trim().max(500).optional(), modelId: z.string().min(1).max(200).optional(), instructionSet: z.string().max(40).optional(), keyframes: z.number().int().min(1).max(MAX_KEYFRAMES).optional() }).parse(req.body);
+    const b = z.object({ type: StepType, twist: z.string().trim().max(500).optional(), modelId: z.string().min(1).max(200).optional(), instructionSet: z.string().max(40).optional(), reference: z.enum(['previous', 'first', 'none']).optional(), keyframes: z.number().int().min(1).max(MAX_KEYFRAMES).optional() }).parse(req.body);
     const iset = b.instructionSet ? instructionSet(b.instructionSet) : null;
     if (b.instructionSet && !iset) return reply.code(400).send({ error: `Unknown instruction set "${b.instructionSet}".` });
     const def = defaultStep(b.type, { ...(b.modelId ? { modelId: b.modelId } : {}), ...(iset ? { instruction: iset.instructions[b.type] } : {}) });
+    // Reference image (opt-in; a set like Storyboard turns it on unless the host said 'none').
+    const refMode = b.reference ?? iset?.reference;
+    if (b.type === 'text_to_image' && refMode && refMode !== 'none') def.params = { ...def.params, reference: refMode };
     // Keyframe video (opt-in): more than two frames needs the Pikaframes endpoint, which has its own resolutions.
     if (b.type === 'image_to_video' && (b.keyframes ?? 1) > 1) {
       if (!b.modelId && b.keyframes! > 2) def.modelId = PIKAFRAMES;

@@ -189,6 +189,7 @@ export default function Present({ token }: { token: string }) {
   const [autoFilter, setAutoFilter] = useState<SlideFilter>(() => (localStorage.getItem('tele.autoFilter') as SlideFilter) || 'image');
   const [autoSec, setAutoSec] = useState(() => Number(localStorage.getItem('tele.autoSec')) || 2);
   const [advFrames, setAdvFrames] = useState(1);
+  const [advRef, setAdvRef] = useState<'' | 'previous' | 'first' | 'none'>(''); // '' = whatever the instruction set does
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const [bottomH, setBottomH] = useState(0);
 
@@ -461,6 +462,7 @@ export default function Present({ token }: { token: string }) {
     const target = atTip && run ? run.id : (await newAdventure(onScreen.artifact.id, onScreen.kind)).id;
     setRun(await api.appendStep(target, type, { twist: twist.trim() || undefined, instructionSet: advSet, modelId: type === 'image_to_video' && advFrames > (KEYFRAME_MODELS[advModels[type] || FASTEST_MODELS[type]] ?? 1) ? PIKAFRAMES : advModels[type] || undefined,
       keyframes: type === 'image_to_video' ? advFrames : undefined,
+      reference: type === 'text_to_image' && advRef ? advRef : undefined,
     }));
     setTwist('');
     setDetailStage(null);
@@ -628,6 +630,19 @@ export default function Present({ token }: { token: string }) {
                     </span>
                   );
                 })}
+                {actions.includes('text_to_image') && (
+                  <select
+                    value={advRef}
+                    onChange={(e) => setAdvRef(e.target.value as typeof advRef)}
+                    title="Reference image for Draw it: also show the model an earlier image of this run so characters and style stay consistent. A deliberate exception to the telephone rule."
+                    className={cx('rounded border bg-neutral-900 px-[0.4vw] py-[0.45vh]', advRef === 'previous' || advRef === 'first' ? 'border-amber-600 text-amber-200' : 'border-neutral-700 text-neutral-100')}
+                  >
+                    <option value="">🖼 ref: per instruction set</option>
+                    <option value="previous">🖼 ref: previous image</option>
+                    <option value="first">🖼 ref: first image</option>
+                    <option value="none">🖼 ref: off</option>
+                  </select>
+                )}
                 {actions.includes('image_to_video') && (
                   <select
                     value={advFrames}

@@ -3,7 +3,7 @@ import type { ArtifactStore, ArtifactRow } from './artifacts.ts';
 import type { Config } from './config.ts';
 import { inspectGeneratedImage, probeVideo, MediaError } from './media.ts';
 import { ProviderError, scrub, type Adapters, type StepInput, type StepResult } from './providers/types.ts';
-import { STEP_TYPES, expandRepeats, validateChain, type AttemptView, type PresetBody, type RunStatus, type RunView, type StepDefinition, type StepView } from '../shared/types.ts';
+import { REFERENCE_NOTE, STEP_TYPES, expandRepeats, validateChain, type AttemptView, type PresetBody, type RunStatus, type RunView, type StepDefinition, type StepView } from '../shared/types.ts';
 import type { EventBus } from './events.ts';
 
 type RunRow = {
@@ -218,6 +218,16 @@ export class Runner {
     return images.slice(-(want - 1)).map((a) => ({ bytes: this.store.readBytes(a), mime: a.mime ?? 'image/jpeg' }));
   }
 
+  /** Opt-in reference image for a text → image step: the run's most recent (or first) image, if it has one. */
+  private referenceImage(r: RunRow, def: StepDefinition, i: number): { bytes: Buffer; mime: string }[] | undefined {
+    const mode = def.type === 'text_to_image' ? def.params?.reference : undefined;
+    if (!mode) return undefined;
+    const ids = [r.source_artifact_id, ...(this.db.prepare('SELECT artifact_id FROM step_executions WHERE run_id = ? AND step_index < ? ORDER BY step_index').all(r.id, i) as any[]).map((x) => x.artifact_id)];
+    const images = ids.map((id) => (id ? this.store.get(id) : null)).filter((a): a is ArtifactRow => !!a && a.kind === 'image');
+    const pick = mode === 'first' ? images[0] : images[images.length - 1];
+    return pick ? [{ bytes: this.store.readBytes(pick), mime: pick.mime ?? 'image/jpeg' }] : undefined;
+  }
+
   private async executeStep(r: RunRow, def: StepDefinition, i: number, signal: AbortSignal): Promise<boolean> {
     const stx = this.db.prepare('SELECT * FROM step_executions WHERE run_id = ? AND step_index = ?').get(r.id, i) as any;
     const predId: string = i === 0 ? r.source_artifact_id : (this.db.prepare('SELECT artifact_id FROM step_executions WHERE run_id = ? AND step_index = ?').get(r.id, i - 1) as any).artifact_id;
@@ -243,8 +253,9 @@ export class Runner {
       this.emit(r.id, 'step.started', { index: i });
       const started = Date.now();
       try {
+        const references = this.referenceImage(r, def, i);
         const common = {
-          type: def.type, modelId: def.modelId, instruction: def.instruction, params: def.params ?? {}, signal,
+          type: def.type, modelId: def.modelId, instruction: references ? `${def.instruction.trim()}\n\n${REFERENCE_NOTE}`.trim() : def.instruction, params: def.params ?? {}, signal,
           onSubmitted: (info: { requestId: string; uploadRef?: string }) => {
             this.db.prepare("UPDATE attempts SET provider_request_id = ?, provider_upload_ref = ?, status = 'queued' WHERE id = ?").run(info.requestId, info.uploadRef ?? null, attemptId);
             this.emit(r.id, 'attempt.queued', { index: i });
@@ -256,7 +267,7 @@ export class Runner {
         };
         const result: StepResult = resumable && autoRetry === 0
           ? await adapter.resume!({ ...common, requestId: prior.provider_request_id })
-          : await adapter.execute({ ...common, input: this.buildInput(pred), keyframes: this.earlierKeyframes(r, def, i) });
+          : await adapter.execute({ ...common, input: this.buildInput(pred), keyframes: this.earlierKeyframes(r, def, i), references });
         const artifact = await this.persist(result, attemptId);
         tx(this.db, () => {
           this.db.prepare("UPDATE attempts SET status = 'succeeded', finished_at = ?, usage = ?, cost_usd = ?, cost_status = ?, provider_model = ?, provider_name = ?, provider_request_id = COALESCE(?, provider_request_id), expanded_prompt = ?, inference_sec = ?, request_snapshot = ? WHERE id = ?")

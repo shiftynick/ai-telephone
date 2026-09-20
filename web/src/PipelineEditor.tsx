@@ -69,10 +69,21 @@ function ParamControls({
   if (step.type === 'text_to_image') {
     const ar = entry?.params?.aspect_ratio;
     const res = entry?.params?.resolution;
-    if (!ar?.length && !res?.length)
-      return <p className="text-[11px] text-neutral-500">This model advertises no aspect ratio / resolution parameters; none are sent.</p>;
     return (
       <div className="grid grid-cols-2 gap-2">
+        {entry?.params?.references !== 0 && (
+          <div className="col-span-2">
+            <label className="lbl">Reference image</label>
+            <select className="inp mt-1" value={step.params.reference ?? ''} onChange={(e) => set({ reference: (e.target.value || undefined) as StepDefinition['params']['reference'] })}>
+              <option value="">off — text only (classic telephone)</option>
+              <option value="previous">previous image — keeps characters and style from frame to frame</option>
+              <option value="first">first image — every frame anchored to the run's first image</option>
+            </select>
+            {step.params.reference && (
+              <p className="mt-1 text-[11px] text-amber-300">Deliberate exception to the telephone rule: this step also sees an earlier image of the run.</p>
+            )}
+          </div>
+        )}
         {!!ar?.length && (
           <div>
             <label className="lbl">Aspect ratio</label>

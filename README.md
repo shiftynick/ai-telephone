@@ -115,6 +115,18 @@ predecessor-only input for that one step, and the editor says so.
 
 Pikaframes is about 7× slower — start it before you talk. fal reports no cost for either (listed ≈ $0.04/s for Pika).
 
+### Reference image for text → image (opt-in exception to the telephone rule)
+
+A text → image step has a **Reference image** parameter: *off* (default, classic telephone), *previous image*
+(the run's most recent image) or *first image* (the run's first image). When on, that one image is sent with the
+description as an OpenRouter `input_references` entry, plus a fixed note telling the model to keep characters,
+setting and style from the reference but draw the *described* scene. If the run has no image yet, the step
+simply runs text-only. All four favourite image models advertise reference support in the catalog. The
+**Storyboard** set switches *previous image* on for its run; adventure mode has a **🖼 ref** selector next to
+*Draw it*. Live test 2026-09-19 (3 describe/draw pairs, Storyboard, `gemini-3.1-flash-lite-image`): $0.105,
+same mug/duck/book/cactus, framing and light in every frame while the action advanced. Trade-off: the
+reference makes frames consistent but also conservative — with a static subject the story moves in small beats.
+
 ## Instruction sets: same pipeline, different words
 
 The **Instructions** selector in the Run panel runs the pipeline you have loaded under a different family of

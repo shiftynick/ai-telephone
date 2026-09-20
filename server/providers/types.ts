@@ -14,6 +14,8 @@ export type StepRequest = {
    * is still the predecessor and is always the last keyframe. Absent for every other step.
    */
   keyframes?: { bytes: Buffer; mime: string }[];
+  /** Opt-in reference image for text → image (params.reference). Absent for every other step. */
+  references?: { bytes: Buffer; mime: string }[];
   signal: AbortSignal;
   /** Called as soon as the provider has durably accepted an async job, before polling. */
   onSubmitted?: (info: { requestId: string; uploadRef?: string }) => void;

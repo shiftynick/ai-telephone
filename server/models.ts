@@ -10,7 +10,7 @@ export const FAVORITES: Record<StepType, string[]> = {
   text_to_video: [FAL_ENDPOINTS.text_to_video],
 };
 
-type Catalog = { chat: any[]; image: any[]; imageParams: Record<string, { aspect_ratio?: string[]; resolution?: string[] }> };
+type Catalog = { chat: any[]; image: any[]; imageParams: Record<string, { aspect_ratio?: string[]; resolution?: string[]; references?: number }> };
 const STALE_MS = 24 * 3600_000;
 
 const enumVals = (p: any): string[] | undefined => (p?.type === 'enum' && Array.isArray(p.values) ? p.values : undefined);
@@ -45,7 +45,10 @@ export class ModelCatalog {
       // Model-level capabilities are a union; intersect across concrete endpoints for favorites.
       await Promise.all(
         image.map(async (m) => {
-          const model = { aspect_ratio: enumVals(m.supported_parameters?.aspect_ratio), resolution: enumVals(m.supported_parameters?.resolution) };
+          // absent = unknown (not judged); an explicit max of 0 = the model takes no reference images
+          const refMax = m.supported_parameters?.input_references?.max;
+          const references = typeof refMax === 'number' ? refMax : undefined;
+          const model = { aspect_ratio: enumVals(m.supported_parameters?.aspect_ratio), resolution: enumVals(m.supported_parameters?.resolution), references };
           imageParams[m.id] = prev[m.id] ?? model;
           if (!FAVORITES.text_to_image.includes(m.id) || !m.endpoints) { imageParams[m.id] = model; return; }
           try {
@@ -59,7 +62,7 @@ export class ModelCatalog {
               }
               return acc?.length ? acc : undefined;
             };
-            imageParams[m.id] = eps.length ? { aspect_ratio: inter('aspect_ratio'), resolution: inter('resolution') } : model;
+            imageParams[m.id] = eps.length ? { aspect_ratio: inter('aspect_ratio'), resolution: inter('resolution'), references } : model;
           } catch {
             imageParams[m.id] = model;
           }
@@ -118,6 +121,7 @@ export class ModelCatalog {
     const v = this.view();
     const m = v.models.find((x) => x.id === def.modelId);
     const t = STEP_TYPES[def.type];
+    if (def.params?.reference && def.type !== 'text_to_image') return 'A reference image only applies to text → image steps.';
     if (!m) {
       if (!v.refreshedAt && t.provider === 'openrouter') return null; // no catalog at all (offline first boot): cannot judge
       return `Model "${def.modelId}" is not in the ${t.provider === 'fal' ? 'supported fal endpoint list (a new endpoint needs an adapter)' : 'OpenRouter catalog'}.`;
@@ -129,6 +133,9 @@ export class ModelCatalog {
       const allowed = m.params?.[key];
       if (!allowed) return `Model "${def.modelId}" does not accept "${key}".`;
       if (!allowed.includes(val)) return `"${key}: ${val}" is not supported by ${def.modelId} (allowed: ${allowed.join(', ')}).`;
+    }
+    if (def.params?.reference) {
+      if (m.params?.references === 0) return `${def.modelId} does not accept reference images according to the catalog.`;
     }
     const kf = def.params?.keyframes;
     if (kf !== undefined && kf > 1) {

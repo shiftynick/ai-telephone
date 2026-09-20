@@ -111,8 +111,10 @@ export class OpenRouterAdapter implements StepAdapter {
   private async generateImage(req: StepRequest): Promise<StepResult> {
     if (req.input.kind !== 'text') throw new ProviderError('unsupported', 'text_to_image requires a text input');
     const prompt = `${req.instruction.trim()}\n\n${req.input.text}`.trim();
-    // input_references is omitted entirely: classic telephone never sends a reference image.
+    // input_references is omitted entirely unless the step opted in (params.reference): classic telephone never sends one.
     const body: Record<string, unknown> = { model: req.modelId, prompt, n: 1 };
+    const refs = req.references ?? [];
+    if (refs.length) body.input_references = refs.map((r) => ({ type: 'image_url', image_url: { url: `data:${r.mime};base64,${r.bytes.toString('base64')}` } }));
     if (req.params.aspect_ratio) body.aspect_ratio = req.params.aspect_ratio;
     if (req.params.resolution) body.resolution = req.params.resolution;
     const json = await this.post('/images', body, this.opts.imageTimeoutMs ?? 240_000, req.signal);
@@ -128,7 +130,7 @@ export class OpenRouterAdapter implements StepAdapter {
       providerModel: json?.model ?? req.modelId,
       providerName: json?.provider,
       providerRequestId: json?.id,
-      requestSnapshot: { endpoint: '/images', ...body },
+      requestSnapshot: { endpoint: '/images', ...body, ...(refs.length ? { input_references: refs.map((r) => ({ image_sha256: sha256(r.bytes) })) } : {}) },
     };
   }
 }
