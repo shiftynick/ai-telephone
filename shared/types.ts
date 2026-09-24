@@ -44,19 +44,24 @@ export const StepParams = z
     duration: z.number().int().min(5).max(15).optional(),
     prompt_expansion_mode: z.enum(['disabled', 'balanced', 'quality']).optional(),
     /**
-     * image → video only, opt-in: how many of the run's most recent images (the predecessor included) are
-     * sent as keyframes. A deliberate, visible exception to the predecessor-only rule. Absent/1 = classic.
-     */
-    /**
      * text → image only, opt-in: also send one earlier image of the run as a visual reference ('previous' =
      * the most recent image, 'first' = the run's first image). Like keyframes, a deliberate, visible exception
      * to the predecessor-only rule. Used when there is such an image; otherwise the step runs text-only.
      */
     reference: z.enum(['previous', 'first']).optional(),
-    keyframes: z.number().int().min(1).max(MAX_KEYFRAMES).optional(),
+    /**
+     * image → video only, opt-in: how many of the run's most recent images (the predecessor included) are
+     * sent as keyframes. A deliberate, visible exception to the predecessor-only rule. Absent/1 = classic.
+     * `'first_last'` is the 2-frame variant: only the run's first image plus the previous image.
+     */
+    keyframes: z.union([z.number().int().min(1).max(MAX_KEYFRAMES), z.literal('first_last')]).optional(),
   })
   .strict();
 export type StepParams = z.infer<typeof StepParams>;
+
+/** Number of keyframe images a selection spans ('first_last' is two frames: first + previous). */
+export type KeyframesValue = number | 'first_last';
+export const keyframesCount = (k: StepParams['keyframes']): number => (k === 'first_last' ? 2 : (k ?? 1));
 
 export const StepDefinition = z.object({
   id: z.string().min(1).max(64),

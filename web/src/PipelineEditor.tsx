@@ -8,6 +8,7 @@ import {
   PRESET_SCHEMA_VERSION,
   STEP_TYPES,
   bridgeType,
+  keyframesCount,
   type ArtifactKind,
   type ModelsView,
   type Preset,
@@ -122,16 +123,25 @@ function ParamControls({
         {maxFrames > 1 && (
           <div className="col-span-3">
             <label className="lbl">Keyframes</label>
-            <select className="inp mt-1" value={step.params.keyframes ?? 1} onChange={(e) => set({ keyframes: Number(e.target.value) > 1 ? Number(e.target.value) : undefined })}>
+            <select
+              className="inp mt-1"
+              value={step.params.keyframes ?? 1}
+              onChange={(e) => set({ keyframes: e.target.value === 'first_last' ? 'first_last' : Number(e.target.value) > 1 ? Number(e.target.value) : undefined })}
+            >
               <option value={1}>1 — previous image only (classic telephone)</option>
+              <option value="first_last">First + last — the run's first image and the previous image (2 frames)</option>
               {Array.from({ length: maxFrames - 1 }, (_, k) => k + 2).map((n) => (
                 <option key={n} value={n}>{n} — the run's last {n} images, oldest first</option>
               ))}
             </select>
-            {(step.params.keyframes ?? 1) > 1 && (
+            {keyframesCount(step.params.keyframes) > 1 && (
               <p className="mt-1 text-[11px] text-amber-300">
                 Deliberate exception to the telephone rule: this step also sees earlier images of the run, as keyframes.
-                {maxFrames === 2 ? ' For 3–5 keyframes pick the Pikaframes model.' : ''}
+                {step.params.keyframes === 'first_last'
+                  ? ' Only the run’s first image and the previous image are sent.'
+                  : maxFrames === 2
+                    ? ' For 3–5 keyframes pick the Pikaframes model.'
+                    : ''}
               </p>
             )}
           </div>
@@ -297,8 +307,12 @@ function StepCard({
             if (params.resolution && res && !res.includes(params.resolution)) params.resolution = res[0];
             if (step.type === 'image_to_video') {
               const max = KEYFRAME_MODELS[modelId] ?? 1;
-              const kf = Math.min(Math.max(params.keyframes ?? 1, modelId === PIKAFRAMES ? 2 : 1), max);
-              if (kf > 1) params.keyframes = kf; else delete params.keyframes;
+              if (params.keyframes === 'first_last') {
+                if (max < 2) delete params.keyframes; // the endpoint takes no second image
+              } else {
+                const kf = Math.min(Math.max(params.keyframes ?? 1, modelId === PIKAFRAMES ? 2 : 1), max);
+                if (kf > 1) params.keyframes = kf; else delete params.keyframes;
+              }
             }
             update({ modelId, params });
           }} onRefresh={onRefreshModels} refreshing={refreshing} />

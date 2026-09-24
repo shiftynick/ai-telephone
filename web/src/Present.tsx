@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FASTEST_MODELS, INSTRUCTION_SETS, KEYFRAME_MODELS, MAX_KEYFRAMES, PIKAFRAMES, NEXT_ACTIONS, PRESET_SCHEMA_VERSION, type ModelsView, type ArtifactKind, type ArtifactView, type PresentStage, type PresentState, type RunView, type StepType } from '../../shared/types.ts';
+import { FASTEST_MODELS, INSTRUCTION_SETS, KEYFRAME_MODELS, MAX_KEYFRAMES, PIKAFRAMES, NEXT_ACTIONS, PRESET_SCHEMA_VERSION, keyframesCount, type ModelsView, type ArtifactKind, type ArtifactView, type PresentStage, type PresentState, type RunView, type StepType } from '../../shared/types.ts';
 import { ALLOWED_ACTIONS, ApiError, api, mediaUrl, type RevealAction, type RunAction, type SourceCandidate } from './api.ts';
 import { cx, fmtDuration, fmtMoney } from './util.tsx';
 
@@ -188,7 +188,7 @@ export default function Present({ token }: { token: string }) {
   const [autoOn, setAutoOn] = useState(false);
   const [autoFilter, setAutoFilter] = useState<SlideFilter>(() => (localStorage.getItem('tele.autoFilter') as SlideFilter) || 'image');
   const [autoSec, setAutoSec] = useState(() => Number(localStorage.getItem('tele.autoSec')) || 2);
-  const [advFrames, setAdvFrames] = useState(1);
+  const [advFrames, setAdvFrames] = useState<number | 'first_last'>(1);
   const [advRef, setAdvRef] = useState<'' | 'previous' | 'first' | 'none'>(''); // '' = whatever the instruction set does
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const [bottomH, setBottomH] = useState(0);
@@ -460,7 +460,7 @@ export default function Present({ token }: { token: string }) {
   const choose = (type: StepType) => guarded(async () => {
     if (!onScreen?.artifact) return;
     const target = atTip && run ? run.id : (await newAdventure(onScreen.artifact.id, onScreen.kind)).id;
-    setRun(await api.appendStep(target, type, { twist: twist.trim() || undefined, instructionSet: advSet, modelId: type === 'image_to_video' && advFrames > (KEYFRAME_MODELS[advModels[type] || FASTEST_MODELS[type]] ?? 1) ? PIKAFRAMES : advModels[type] || undefined,
+    setRun(await api.appendStep(target, type, { twist: twist.trim() || undefined, instructionSet: advSet, modelId: type === 'image_to_video' && keyframesCount(advFrames) > (KEYFRAME_MODELS[advModels[type] || FASTEST_MODELS[type]] ?? 1) ? PIKAFRAMES : advModels[type] || undefined,
       keyframes: type === 'image_to_video' ? advFrames : undefined,
       reference: type === 'text_to_image' && advRef ? advRef : undefined,
     }));
@@ -646,13 +646,14 @@ export default function Present({ token }: { token: string }) {
                 {actions.includes('image_to_video') && (
                   <select
                     value={advFrames}
-                    onChange={(e) => setAdvFrames(Number(e.target.value))}
-                    title="Keyframes for Animate it: also send the run's earlier images as keyframes (oldest first). 3+ uses Pika Pikaframes. A deliberate exception to the telephone rule."
-                    className={cx('rounded border bg-neutral-900 px-[0.4vw] py-[0.45vh]', advFrames > 1 ? 'border-amber-600 text-amber-200' : 'border-neutral-700 text-neutral-100')}
+                    onChange={(e) => setAdvFrames(e.target.value === 'first_last' ? 'first_last' : Number(e.target.value))}
+                    title="Keyframes for Animate it: also send earlier images of the run as keyframes. First + last sends the run's first image and its previous image. 3+ uses Pika Pikaframes. A deliberate exception to the telephone rule."
+                    className={cx('rounded border bg-neutral-900 px-[0.4vw] py-[0.45vh]', keyframesCount(advFrames) > 1 ? 'border-amber-600 text-amber-200' : 'border-neutral-700 text-neutral-100')}
                   >
                     {Array.from({ length: MAX_KEYFRAMES }, (_, k) => k + 1).map((n) => (
                       <option key={n} value={n}>{n === 1 ? '🎞 1 frame' : `🎞 ${n} keyframes`}</option>
                     ))}
+                    <option value="first_last">🎞 first + last frames</option>
                   </select>
                 )}
                 <select

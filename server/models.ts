@@ -1,6 +1,6 @@
 import { type DB, kvGet, kvSet, now } from './db.ts';
 import { FAL_ENDPOINTS } from './providers/fal.ts';
-import { KEYFRAME_MODELS, PIKAFRAMES, STEP_TYPES, type ModelEntry, type ModelsView, type StepDefinition, type StepType } from '../shared/types.ts';
+import { KEYFRAME_MODELS, PIKAFRAMES, STEP_TYPES, keyframesCount, type ModelEntry, type ModelsView, type StepDefinition, type StepType } from '../shared/types.ts';
 
 export const FAVORITES: Record<StepType, string[]> = {
   image_to_text: ['google/gemini-3.8-flash', 'openai/gpt-4.1-mini', 'anthropic/claude-sonnet-4.6', 'google/gemini-2.5-flash'],
@@ -138,12 +138,13 @@ export class ModelCatalog {
       if (m.params?.references === 0) return `${def.modelId} does not accept reference images according to the catalog.`;
     }
     const kf = def.params?.keyframes;
-    if (kf !== undefined && kf > 1) {
+    const frames = keyframesCount(kf);
+    if (kf !== undefined && frames > 1) {
       if (def.type !== 'image_to_video') return 'Keyframes only apply to image → video steps.';
       const max = KEYFRAME_MODELS[def.modelId] ?? 1;
-      if (kf > max) return `${def.modelId} accepts at most ${max} keyframe image${max === 1 ? '' : 's'}${max < 5 ? `; use ${PIKAFRAMES} for up to 5` : ''}.`;
+      if (frames > max) return `${def.modelId} accepts at most ${max} keyframe image${max === 1 ? '' : 's'}${max < 5 ? `; use ${PIKAFRAMES} for up to 5` : ''}.`;
     }
-    if (def.modelId === PIKAFRAMES && (kf ?? 1) < 2) return 'Pikaframes needs "keyframes" set to 2–5.';
+    if (def.modelId === PIKAFRAMES && frames < 2) return 'Pikaframes needs "keyframes" set to 2–5.';
     if (t.provider !== 'fal' && (def.params?.duration !== undefined || def.params?.prompt_expansion_mode !== undefined)) return 'duration/prompt expansion only apply to video steps.';
     return null;
   }

@@ -207,15 +207,24 @@ export class Runner {
   }
 
   /**
-   * Opt-in keyframe video: the run's most recent images BEFORE the predecessor, oldest first. This is the one
+   * Opt-in keyframe video: the run's images BEFORE the predecessor, oldest first. This is the one
    * deliberate exception to predecessor-only input, and only when the step's `keyframes` param asks for it.
+   * `'first_last'` returns just the run's first image; the predecessor is appended by the adapter, so the
+   * job spans first + last. When the first image IS the predecessor (a video step on the very first artifact)
+   * it degrades to the classic single frame.
    */
   private earlierKeyframes(r: RunRow, def: StepDefinition, i: number): { bytes: Buffer; mime: string }[] | undefined {
-    const want = def.type === 'image_to_video' ? (def.params?.keyframes ?? 1) : 1;
-    if (want <= 1) return undefined;
+    const kf = def.type === 'image_to_video' ? def.params?.keyframes : undefined;
+    if (kf === undefined || kf === 1) return undefined;
     const ids = [r.source_artifact_id, ...(this.db.prepare('SELECT artifact_id FROM step_executions WHERE run_id = ? AND step_index < ? ORDER BY step_index').all(r.id, i - 1) as any[]).map((x) => x.artifact_id)];
     const images = ids.map((id) => (id ? this.store.get(id) : null)).filter((a): a is ArtifactRow => !!a && a.kind === 'image');
-    return images.slice(-(want - 1)).map((a) => ({ bytes: this.store.readBytes(a), mime: a.mime ?? 'image/jpeg' }));
+    if (kf === 'first_last') {
+      const predId: string = i === 0 ? r.source_artifact_id : (this.db.prepare('SELECT artifact_id FROM step_executions WHERE run_id = ? AND step_index = ?').get(r.id, i - 1) as any).artifact_id;
+      const first = images[0];
+      if (!first || first.id === predId) return undefined;
+      return [{ bytes: this.store.readBytes(first), mime: first.mime ?? 'image/jpeg' }];
+    }
+    return images.slice(-(kf - 1)).map((a) => ({ bytes: this.store.readBytes(a), mime: a.mime ?? 'image/jpeg' }));
   }
 
   /** Opt-in reference image for a text → image step: the run's most recent (or first) image, if it has one. */

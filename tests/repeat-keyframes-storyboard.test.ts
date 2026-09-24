@@ -89,6 +89,29 @@ describe('keyframe video (opt-in exception to predecessor-only input)', () => {
     expect(fal.uploads[0].bytes.equals(fal.uploads[1].bytes)).toBe(false);
   });
 
+  it("first + last: sends only the run's first image as first frame and the predecessor as last frame", async () => {
+    const { fal, view } = await run(animate(H3, { resolution: '768P', duration: 5, keyframes: 'first_last' }));
+    expect(view.status).toBe('completed');
+    expect(fal.uploads).toHaveLength(2);
+    expect(fal.submits[0].input).toMatchObject({ image_url: 'https://fake.fal.media/upload/1.jpg', end_image_url: 'https://fake.fal.media/upload/2.jpg' });
+    expect(fal.uploads[0].bytes.equals(fal.uploads[1].bytes)).toBe(false);
+  });
+
+  it('first + last on a single-image run falls back to one frame (first === predecessor)', async () => {
+    const fal = makeFalFake();
+    const mock = new MockAdapter('/tmp', 0);
+    const app = await makeApp({ adapters: { openrouter: mock, fal: fal.adapter } });
+    await imageSource(app);
+    const res = await post(app, '/api/runs', { preset: preset([animate(H3, { resolution: '768P', duration: 5, keyframes: 'first_last' })]) });
+    expect(res.statusCode, res.body).toBe(200);
+    await post(app, `/api/runs/${res.json().id}/actions`, { action: 'start' });
+    await app.runner.idle();
+    const view = (await get(app, `/api/runs/${res.json().id}`)).json();
+    expect(view.status).toBe('completed');
+    expect(fal.uploads).toHaveLength(1);
+    expect(fal.submits[0].input).not.toHaveProperty('end_image_url');
+  });
+
   it('pikaframes gets every image of the run in order (source + 2 generated), with one transition per gap', async () => {
     const { fal, view } = await run(animate(PIKAFRAMES, { resolution: '720p', duration: 6, keyframes: 5 }));
     expect(view.status).toBe('completed');

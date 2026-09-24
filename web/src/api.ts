@@ -170,14 +170,14 @@ export const api = {
   run: (id: string) => request<RunView>(`/api/runs/${id}`),
   createRun: (body: { preset: PresetBody; sourceArtifactId?: string; budgetUsd?: number | null; select?: boolean; interactive?: boolean; autoBridge?: boolean; instructionSet?: string }) =>
     json<RunView>('/api/runs', 'POST', body),
-  appendStep: (id: string, type: StepType, opts: { twist?: string; instructionSet?: string; modelId?: string; keyframes?: number; reference?: 'previous' | 'first' | 'none' } = {}) =>
+  appendStep: (id: string, type: StepType, opts: { twist?: string; instructionSet?: string; modelId?: string; keyframes?: number | 'first_last'; reference?: 'previous' | 'first' | 'none' } = {}) =>
     json<RunView>(`/api/runs/${id}/steps`, 'POST', {
       type,
       ...(opts.twist ? { twist: opts.twist } : {}),
       ...(opts.instructionSet ? { instructionSet: opts.instructionSet } : {}),
       ...(opts.modelId ? { modelId: opts.modelId } : {}),
       ...(opts.reference ? { reference: opts.reference } : {}),
-      ...(opts.keyframes && opts.keyframes > 1 ? { keyframes: opts.keyframes } : {}),
+      ...(opts.keyframes !== undefined && (opts.keyframes === 'first_last' || opts.keyframes > 1) ? { keyframes: opts.keyframes } : {}),
     }),
   runAction: (id: string, action: RunAction, acknowledgeBilling = false) =>
     json<RunView>(`/api/runs/${id}/actions`, 'POST', { action, acknowledgeBilling }),

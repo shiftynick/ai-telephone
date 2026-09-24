@@ -105,8 +105,9 @@ before anything is billed. Limit: 200 unrolled steps.
 
 An image → video step has a **Keyframes** parameter. At 1 (default) it is classic telephone: only the previous
 image. At 2+ the step also receives the run's most recent earlier images, oldest first, with the predecessor
-always last — so a storyboard run can be animated *through* its frames. This deliberately breaks
-predecessor-only input for that one step, and the editor says so.
+always last — so a storyboard run can be animated *through* its frames. **First + last** is a 2-frame variant
+that sends only the run's first image plus the previous image — a look back at the origin instead of the chain.
+This deliberately breaks predecessor-only input for that one step, and the editor says so.
 
 | Endpoint | Keyframes | Live test 2026-09-19 |
 |---|---|---|
