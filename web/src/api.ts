@@ -9,6 +9,7 @@ import type {
   StepIssue,
   StepType,
   WordGame,
+  ProjectorDisplay,
 } from '../../shared/types.ts';
 
 // ---- view models that only exist on the wire (documented in docs/API.md) ----
@@ -39,6 +40,7 @@ export type SessionView = {
   revealed: number[];
   currentStage: number;
   compare: boolean;
+  display: ProjectorDisplay;
 };
 
 export type SourceCandidate = {
@@ -166,6 +168,9 @@ export const api = {
 
   // LAN
   lan: () => request<LanView>('/api/lan'),
+  /** projector display settings (sound, phone QR, slideshow), shared by the host console and the projector */
+  setDisplay: (patch: { muted?: boolean; qr?: boolean; slideshow?: Partial<ProjectorDisplay['slideshow']>; soundReady?: boolean | null }) =>
+    json<{ display: ProjectorDisplay }>('/api/session/display', 'POST', patch),
   /** public phone link through Tailscale Funnel (no venue Wi-Fi needed) */
   publicLink: () => request<PublicView>('/api/public'),
   setPublic: (on: boolean) => json<PublicView>('/api/public', 'POST', { on }),

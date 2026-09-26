@@ -2,14 +2,14 @@ import { type DB, newId, newToken, now, sha256 } from './db.ts';
 import type { ArtifactStore } from './artifacts.ts';
 import type { Runner } from './runner.ts';
 import type { EventBus } from './events.ts';
-import { STEP_TYPES, WORD_GAMES, WORD_GAME_IDS, type PresentStage, type PresentState } from '../shared/types.ts';
+import { DEFAULT_DISPLAY, STEP_TYPES, WORD_GAMES, WORD_GAME_IDS, type PresentStage, type PresentState, type ProjectorDisplay } from '../shared/types.ts';
 
 const SESSION_TTL_MS = 12 * 3600_000;
 
 export type SessionRow = {
   id: string; upload_token_hash: string | null; projector_token_hash: string | null; upload_token: string | null; projector_token: string | null;
   expires_at: number; source_artifact_id: string | null; selected_run_id: string | null; replay: number; auto_reveal: number;
-  revealed: string; current_stage: number; compare: number; created_at: number;
+  revealed: string; current_stage: number; compare: number; created_at: number; display?: string;
 };
 
 export class Sessions {
@@ -109,7 +109,26 @@ export class Sessions {
       source: this.store.view(s.source_artifact_id ? this.store.get(s.source_artifact_id) : null) ?? null,
       uploads, selectedRunId: s.selected_run_id, replay: !!s.replay, autoReveal: !!s.auto_reveal,
       revealed: JSON.parse(s.revealed) as number[], currentStage: s.current_stage, compare: !!s.compare,
+      display: this.display(s),
     };
+  }
+
+  // ---- projector display (sound, phone QR, slideshow): one shared state for host console + projector ----
+
+  display(s: SessionRow): ProjectorDisplay {
+    let d: any = {};
+    try { d = JSON.parse(s.display ?? '{}'); } catch { /* keep defaults */ }
+    return { ...DEFAULT_DISPLAY, ...d, slideshow: { ...DEFAULT_DISPLAY.slideshow, ...(d.slideshow ?? {}) } };
+  }
+
+  setDisplay(patch: { muted?: boolean; qr?: boolean; slideshow?: Partial<ProjectorDisplay['slideshow']>; soundReady?: boolean | null }): ProjectorDisplay {
+    const s = this.current();
+    const cur = this.display(s);
+    const next: ProjectorDisplay = { ...cur, ...patch, slideshow: { ...cur.slideshow, ...(patch.slideshow ?? {}) } } as ProjectorDisplay;
+    if (JSON.stringify(next) === JSON.stringify(cur)) return cur; // no-op: no event, no refetch storm
+    this.db.prepare('UPDATE sessions SET display = ? WHERE id = ?').run(JSON.stringify(next), s.id);
+    this.bus.publish(null, 'present.changed');
+    return next;
   }
 
   // ---- reveal state (server-side so the projector always follows the host) ----
@@ -177,7 +196,7 @@ export class Sessions {
 
   /** Projector payload. Unrevealed stages carry NO artifact id, text, or instruction. */
   presentState(s: SessionRow): PresentState {
-    const base = { replay: !!s.replay, currentStage: s.current_stage, compare: !!s.compare, serverTime: now() };
+    const base = { display: this.display(s), replay: !!s.replay, currentStage: s.current_stage, compare: !!s.compare, serverTime: now() };
     if (!s.selected_run_id) return { ...base, hasRun: false, stages: [] };
     const run = this.runner.view(s.selected_run_id);
     const revealed = new Set<number>(JSON.parse(s.revealed));

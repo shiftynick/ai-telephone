@@ -73,6 +73,9 @@ export function openDb(file: string): DB {
   // Additive migrations for databases created by earlier builds.
   const cols = (db.prepare('PRAGMA table_info(runs)').all() as any[]).map((c) => c.name);
   if (!cols.includes('interactive')) db.exec('ALTER TABLE runs ADD COLUMN interactive INTEGER NOT NULL DEFAULT 0');
+  // projector display settings (sound, phone QR, slideshow), driven from the host console or the projector
+  const scols = (db.prepare('PRAGMA table_info(sessions)').all() as any[]).map((c) => c.name);
+  if (!scols.includes('display')) db.exec("ALTER TABLE sessions ADD COLUMN display TEXT NOT NULL DEFAULT '{}'");
   return db;
 }
 

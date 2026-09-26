@@ -100,3 +100,38 @@ describe('public phone link', () => {
     }
   });
 });
+
+describe('projector display (sound, phone QR, slideshow) is shared host ↔ projector', () => {
+  it('host-only writes, patch semantics, visible to the projector, validated', async () => {
+    const { makeApp } = await import('./helpers.ts');
+    const mock = new MockAdapter('/tmp', 0);
+    const app = await makeApp({ adapters: { openrouter: mock, fal: mock } });
+    const s0 = (await get(app, '/api/session')).json();
+    expect(s0.display).toEqual({ muted: false, qr: false, slideshow: { on: false, filter: 'image', sec: 2 }, soundReady: null });
+    await post(app, '/api/session/display', { qr: true });
+    await post(app, '/api/session/display', { slideshow: { on: true, sec: 5 } });
+    await post(app, '/api/session/display', { soundReady: false });
+    const d = (await get(app, '/api/session')).json().display;
+    expect(d).toEqual({ muted: false, qr: true, slideshow: { on: true, filter: 'image', sec: 5 }, soundReady: false });
+    // the projector reads it with its token…
+    const state = await app.app.inject({ method: 'GET', url: `/api/present/${s0.projectorToken}/state`, headers: { host: 'localhost:8787' } });
+    expect(state.json().display).toEqual(d);
+    // …but only the host can change it, and junk is refused
+    expect((await post(app, '/api/session/display', { qr: false }, { cookie: null })).statusCode).toBe(401);
+    expect((await post(app, '/api/session/display', { slideshow: { sec: 99 } })).statusCode).toBe(400);
+    expect((await post(app, '/api/session/display', { volume: 11 })).statusCode).toBe(400);
+  });
+});
+
+describe('fixed projector address for the talk world', () => {
+  it('/present redirects only the host to the current projector link, keeping the query', async () => {
+    const { makeApp } = await import('./helpers.ts');
+    const mock = new MockAdapter('/tmp', 0);
+    const app = await makeApp({ adapters: { openrouter: mock, fal: mock } });
+    const token = (await get(app, '/api/session')).json().projectorToken;
+    const ok = await get(app, '/present?embed=1');
+    expect(ok.statusCode).toBe(302);
+    expect(ok.headers.location).toBe(`/present/${token}?embed=1`);
+    expect((await get(app, '/present?embed=1', { cookie: null })).statusCode).toBe(404);
+  });
+});

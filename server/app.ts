@@ -256,6 +256,17 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
     sessions.selectRun(b.runId, b.replay);
     return sessions.hostView();
   });
+  // projector display settings, shared by the host console and the projector window (both host-only)
+  app.post('/api/session/display', { preHandler: requireHost }, async (req) => {
+    const b = z.object({
+      muted: z.boolean().optional(),
+      qr: z.boolean().optional(),
+      slideshow: z.object({ on: z.boolean().optional(), filter: z.enum(['image', 'text', 'all']).optional(), sec: z.number().min(0.3).max(8).optional() }).optional(),
+      soundReady: z.boolean().nullable().optional(),
+    }).strict().parse(req.body);
+    return { display: sessions.setDisplay(b) };
+  });
+
   app.post('/api/session/reveal', { preHandler: requireHost }, async (req) => {
     const a = z.discriminatedUnion('action', [
       z.object({ action: z.literal('show'), stage: z.number().int().min(0) }),
@@ -480,6 +491,13 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
     await app.register(fstatic, { root: webDir, index: false }); // wildcard lookup: rebuilt hashed assets are served without a restart
     const index = (_: FastifyRequest, reply: FastifyReply) => reply.header('Cache-Control', 'no-store').type('text/html').send(fs.readFileSync(path.join(webDir, 'index.html')));
     for (const p of ['/', '/host', '/join/:token', '/present/:token']) app.get(p, index);
+    // A fixed projector address for the talk's world (it embeds the projector at its game stop): only the host's
+    // browser is redirected to the current secret projector link; the query (e.g. ?embed=1) is kept.
+    app.get('/present', async (req, reply) => {
+      if (!isHost(req)) return reply.code(404).send({ error: 'Not found.' });
+      const q = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+      return reply.header('Cache-Control', 'no-store').redirect(`/present/${sessions.hostView().projectorToken}${q}`, 302);
+    });
   }
   app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: 'Not found.' }));
 

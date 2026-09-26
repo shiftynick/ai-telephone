@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { FASTEST_MODELS, INSTRUCTION_SETS, KEYFRAME_MODELS, MAX_KEYFRAMES, PIKAFRAMES, NEXT_ACTIONS, PRESET_SCHEMA_VERSION, keyframesCount, type ModelsView, type ArtifactKind, type ArtifactView, type PresentStage, type PresentState, type RunView, type StepType , WORD_GAMES, WORD_GAME_IDS, textForm, type WordGame , SPEECH_TONES } from '../../shared/types.ts';
-import { ALLOWED_ACTIONS, ApiError, api, mediaUrl, type RevealAction, type RunAction, type SourceCandidate } from './api.ts';
+import { ALLOWED_ACTIONS, ApiError, api, mediaUrl, type RevealAction, type RunAction, type SessionView, type SourceCandidate } from './api.ts';
 import { cx, fmtDuration, fmtMoney } from './util.tsx';
 import { WaitingStage, useSoundtrack } from './waiting.tsx';
+import { PhoneQr } from './PhoneQr.tsx';
 import { ACTION_LABEL, WhatNextPanel, stepOptions, useAdventureSettings } from './Adventure.tsx';
 
 function VideoStage({ src, poster, autoPlay }: { src: string; poster?: string; autoPlay?: boolean }) {
@@ -315,7 +316,27 @@ export default function Present({ token }: { token: string }) {
   const [advOpen, setAdvOpen] = useState(false); // the "What next?" panel, opened by hand
   const [advClosed, setAdvClosed] = useState(false); // closed by hand: an idle adventure no longer pops it open
   const [menuOpen, setMenuOpen] = useState(false); // the ⋯ menu in the dock
+  // ?embed=1: shown inside the talk's world (its game stop). No host dock (the host console drives everything);
+  // Esc with nothing open hands control back to the world.
+  const embed = new URLSearchParams(location.search).get('embed') === '1';
+  const exitToWorld = () => window.parent !== window && window.parent.postMessage({ type: 'deck:exit', slide: 'projector', reason: 'esc' }, '*');
   const [muted, setMuted] = useState(() => localStorage.getItem('tele.muted') === '1');
+  const [session, setSession] = useState<SessionView | null>(null); // host only: for the phone QR
+  const [qrOpen, setQrOpen] = useState(false);
+  // Sound, phone QR and slideshow are shared with the host console (server-side), so either can drive them.
+  const patchDisplay = (p: Parameters<typeof api.setDisplay>[0]) => { if (isHost) void api.setDisplay(p).catch(() => {}); };
+  const displayKey = JSON.stringify(state?.display ?? null);
+  useEffect(() => {
+    const d = state?.display;
+    if (!d) return;
+    setMuted(d.muted);
+    setQrOpen(d.qr);
+    setAutoOn(d.slideshow.on);
+    setAutoFilter(d.slideshow.filter);
+    setAutoSec(d.slideshow.sec);
+  }, [displayKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const toggleQr = () => { const v = !qrOpen; setQrOpen(v); patchDisplay({ qr: v }); };
+  const toggleMute = () => { const v = !muted; setMuted(v); localStorage.setItem('tele.muted', v ? '1' : '0'); patchDisplay({ muted: v }); };
   const stripRef = useRef<HTMLDivElement | null>(null);
   const [stripH, setStripH] = useState(0);
 
@@ -349,6 +370,7 @@ export default function Present({ token }: { token: string }) {
         setIsHost(true);
         const ses = await api.session();
         if (!alive) return;
+        setSession(ses);
         setRunId(ses.selectedRunId);
         setRun(ses.selectedRunId ? await api.run(ses.selectedRunId) : null);
       } catch {
@@ -479,7 +501,7 @@ export default function Present({ token }: { token: string }) {
   const slidesKey = slides.map((s) => s.stage).join(',');
   useEffect(() => {
     if (!autoOn) return;
-    if (!slides.length) return setAutoOn(false);
+    if (!slides.length) { patchDisplay({ slideshow: { on: false } }); return setAutoOn(false); }
     const at = slides.find((s) => s.stage === detailStage);
     const next = (slides.find((s) => s.stage > (detailStage ?? -1)) ?? slides[0]).stage;
     // a video gets at least its own length; everything else the chosen speed
@@ -494,25 +516,29 @@ export default function Present({ token }: { token: string }) {
     for (const s of slides) if (s.kind === 'image' && s.artifact) new Image().src = mediaUrl(s.artifact.id, token);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoOn, slidesKey, token]);
-  const stopAuto = () => { setAutoOn(false); setDetailStage(null); };
+  const stopAuto = () => { if (autoOn) patchDisplay({ slideshow: { on: false } }); setAutoOn(false); setDetailStage(null); };
+  const startAuto = () => { setAutoOn(true); patchDisplay({ slideshow: { on: true } }); };
   const speed = (dir: -1 | 1) => setAutoSec((cur) => {
     const i = SPEEDS.indexOf(cur);
     const v = SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, (i < 0 ? 3 : i) - dir))]; // faster = shorter dwell
     localStorage.setItem('tele.autoSec', String(v));
+    patchDisplay({ slideshow: { sec: v } });
     return v;
   });
 
   // ← / → flip through REVEALED stages locally; Esc returns to the host's stage.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!state?.hasRun) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+      if (embed && e.key === 'Escape' && !autoOn && detailStage === null && !qrOpen && !menuOpen) return void exitToWorld();
+      if (!state?.hasRun) return;
       if (e.key === 'Escape') { setMenuOpen(false); setAdvOpen(false); setAdvClosed(true); adv.setPick(null); return stopAuto(); }
-      if (e.key === ' ') { e.preventDefault(); return autoOn ? stopAuto() : setAutoOn(true); }
+      if (e.key === ' ') { e.preventDefault(); return autoOn ? stopAuto() : startAuto(); }
       if (e.key === '+' || e.key === '=') return speed(1);
       if (e.key === '-') return speed(-1);
       if (e.key === 'c' && isHost) return setPinned((p) => !p);
+      if ((e.key === 'q' || e.key === 'Q') && isHost) return toggleQr();
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
       if (isHost && detailStage === null) return void reveal({ action: e.key === 'ArrowRight' ? 'next' : 'prev' });
       const open = state.stages.filter((s) => s.revealed && s.artifact).map((s) => s.stage);
@@ -523,11 +549,13 @@ export default function Present({ token }: { token: string }) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [state, detailStage, isHost, reveal, autoOn]);
+  }, [state, detailStage, isHost, reveal, autoOn, qrOpen, menuOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const running = state?.stages.some((s) => s.status === 'running');
   // the soundtrack loops while a step generates and plays a jingle each time one lands
   const soundOn = useSoundtrack(!!running, state?.stages.filter((s) => s.status === 'done').length ?? 0, muted);
+  // tell the host console whether this projector's browser is actually playing sound (or waiting for a click)
+  useEffect(() => { patchDisplay({ soundReady: soundOn }); }, [soundOn, isHost]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!running) return;
     const t = setInterval(() => setTick((n) => n + 1), 500);
@@ -556,7 +584,7 @@ export default function Present({ token }: { token: string }) {
         <p className="mt-[2vh] text-neutral-500" style={{ fontSize: 'clamp(14px, 1.6vw, 28px)' }}>
           Waiting for the host…
         </p>
-        {isHost && (
+        {isHost && !embed && (
           <button type="button" className="pbtn mt-[4vh]" style={{ fontSize: 'clamp(12px, 1.2vw, 22px)' }} onClick={() => setStartOpen(true)}>
             ✨ Start an adventure
           </button>
@@ -691,7 +719,7 @@ export default function Present({ token }: { token: string }) {
           disabled={!autoOn && slides.length < 2}
           aria-label={autoOn ? 'Stop autoplay' : 'Autoplay'}
           title={`Autoplay the revealed ${autoFilter === 'all' ? 'steps' : `${autoFilter} steps`} (Space) · ${autoSec}s each (−/+). Local to this window.`}
-          onClick={() => (autoOn ? stopAuto() : setAutoOn(true))}
+          onClick={() => (autoOn ? stopAuto() : startAuto())}
           style={{ fontSize: 'clamp(9px, 0.8vw, 15px)' }}
         >
           <span style={{ fontSize: 'clamp(12px, 1.1vw, 20px)' }}>{autoOn ? '⏸' : '▶'}</span>
@@ -708,7 +736,7 @@ export default function Present({ token }: { token: string }) {
               disabled={!s.revealed}
               // long runs scroll sideways: keep the step being shown in view
               ref={isViewing ? (el) => el?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) : undefined}
-              onClick={() => { setAutoOn(false); setDetailStage(detail?.stage === s.stage ? null : s.stage); }}
+              onClick={() => { if (autoOn) patchDisplay({ slideshow: { on: false } }); setAutoOn(false); setDetailStage(detail?.stage === s.stage ? null : s.stage); }}
               title={s.revealed ? `${s.stage === 0 ? 'Start' : `${s.stage} · ${s.label}`}${s.modelId ? ` · ${s.modelId}` : ''}${v !== null ? ` · ${v}% of the original` : ''} (←/→ to flip, Esc to return)` : s.status === 'running' ? 'generating…' : 'not revealed yet'}
               className={cx(
                 'relative flex max-w-[5.5vw] min-w-[3.2vw] flex-1 flex-col items-center rounded-lg px-[0.3vw] pt-[0.5vh] pb-[1vh] transition-colors',
@@ -729,7 +757,7 @@ export default function Present({ token }: { token: string }) {
       </div>
 
       {/* host-only floating controls: present only when this browser holds the host cookie; fade when the mouse rests */}
-      {isHost && (
+      {isHost && !embed && (
         <div
           className={cx('pointer-events-none absolute inset-x-0 z-40 flex flex-col items-center gap-[0.8vh] px-[2vw] transition-opacity duration-300', dockShown ? 'opacity-100' : 'opacity-0')}
           style={{ bottom: stripH + 6, fontSize: 'clamp(9px, 0.85vw, 15px)' }}
@@ -755,7 +783,7 @@ export default function Present({ token }: { token: string }) {
               <span className="text-neutral-500">autoplay</span>
               <select
                 value={autoFilter}
-                onChange={(e) => { localStorage.setItem('tele.autoFilter', e.target.value); setAutoFilter(e.target.value as SlideFilter); }}
+                onChange={(e) => { localStorage.setItem('tele.autoFilter', e.target.value); setAutoFilter(e.target.value as SlideFilter); patchDisplay({ slideshow: { filter: e.target.value as SlideFilter } }); }}
                 className="rounded border border-neutral-700 bg-neutral-900 px-[0.3vw] py-[0.2vh] text-neutral-200"
               >
                 <option value="image">images only</option>
@@ -818,12 +846,15 @@ export default function Present({ token }: { token: string }) {
             >
               ✨ What next?
             </button>
+            <button type="button" className={cx(ghost, qrOpen && 'bg-sky-950 text-sky-200')} title="Show the phone QR code big on the screen (Q)" onClick={toggleQr}>
+              📱 QR
+            </button>
             <button
               type="button"
               className={ghost}
               aria-label={muted ? 'Unmute sound' : 'Mute sound'}
               title={muted ? 'Sound is off: click to turn the waiting music and step jingles on' : 'Mute the waiting music and step jingles'}
-              onClick={() => setMuted((m) => { localStorage.setItem('tele.muted', m ? '0' : '1'); return !m; })}
+              onClick={toggleMute}
             >
               {muted ? '🔇' : '🔊'}
             </button>
@@ -838,6 +869,8 @@ export default function Present({ token }: { token: string }) {
           🔈 click anywhere on this window to turn on sound
         </div>
       )}
+
+      {qrOpen && isHost && session && <PhoneQr session={session} onClose={() => { setQrOpen(false); patchDisplay({ qr: false }); }} />}
 
       {startChooser}
 

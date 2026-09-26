@@ -466,7 +466,21 @@ export type PresentStage = {
   resemblance?: ResemblanceView; // only when revealed; the source is always 100
 };
 
+/**
+ * What the projector shows besides the run itself. Server-side so the host console and the projector control
+ * the same thing (the projector never has to be touched). soundReady is reported BY the projector: whether its
+ * browser actually lets it play audio (null = no projector has reported yet).
+ */
+export type ProjectorDisplay = {
+  muted: boolean;
+  qr: boolean;
+  slideshow: { on: boolean; filter: 'image' | 'text' | 'all'; sec: number };
+  soundReady: boolean | null;
+};
+export const DEFAULT_DISPLAY: ProjectorDisplay = { muted: false, qr: false, slideshow: { on: false, filter: 'image', sec: 2 }, soundReady: null };
+
 export type PresentState = {
+  display: ProjectorDisplay;
   hasRun: boolean;
   replay: boolean;
   runStatus?: RunStatus;

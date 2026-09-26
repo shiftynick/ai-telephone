@@ -1,5 +1,5 @@
 // Types for the mascot module (copied from slides/world/mascot/mascot.js, owned by the world agent).
-export type MascotClip = 'idle' | 'walk' | 'dance' | 'think' | 'cheer';
+export type MascotClip = 'idle' | 'walk' | 'dance' | 'think' | 'cheer' | 'wave';
 export type Mascot = {
   root: import('three').Object3D;
   names: MascotClip[];

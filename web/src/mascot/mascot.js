@@ -7,7 +7,7 @@
      import { createMascot } from './mascot/mascot.js';
      const m = createMascot(THREE, { smoke: true });
      scene.add(m.root);          // ~1 unit tall, feet on y = 0, facing +z
-     m.play('dance');            // 'idle' | 'walk' | 'dance' | 'think' | 'cheer'
+     m.play('dance');            // 'idle' | 'walk' | 'dance' | 'think' | 'cheer' | 'wave'
      m.play('cheer', { loop: false }); // one shot, then back to idle
      m.update(dt);               // every frame, dt in seconds
      m.dispose();
@@ -432,7 +432,7 @@ export function createMascot(THREE, opts = {}) {
         if (move === 0) { // hands up, twisting
           return { ...ZERO, hipY: bounce * 0.05, squash: 1 - (1 - bounce) * 0.06, hipZ: sway * 0.12, spinY: s(t * TAU / 2) * 0.55,
             headZ: -sway * 0.18, headX: -0.06 + bounce * 0.08,
-            armLz: 2.0 + s(beat) * 0.35, armRz: -2.0 + s(beat) * 0.35,
+            armLz: 1.8 + s(beat) * 0.3, armRz: -1.8 + s(beat) * 0.3, armLx: -0.4, armRx: -0.4,
             legLx: -bounce * 0.3, legRx: -(1 - bounce) * 0.3, legLz: 0.08, legRz: -0.08, tail: s(beat * 2) * 0.8, ears: bounce * 0.3 };
         }
         return { ...ZERO, hipY: bounce * 0.06, squash: 1 - (1 - bounce) * 0.07, hipZ: sway * 0.15, spinY: sway * 0.3, // arm pumps
@@ -458,9 +458,18 @@ export function createMascot(THREE, opts = {}) {
         const jump = p < 0.7 ? s(p / 0.7 * Math.PI) : 0;
         const crouch = p < 0.12 ? s(p / 0.12 * Math.PI) * 0.6 : p > 0.7 ? s((p - 0.7) / 0.3 * Math.PI) * 0.8 : 0;
         return { ...ZERO, hipY: jump * 0.26 - crouch * 0.035, squash: 1 - crouch * 0.12 + jump * 0.05,
-          armLz: 2.05 - crouch * 0.6, armRz: -2.05 + crouch * 0.6, armLx: -0.25, armRx: -0.25,
+          armLz: 1.85 - crouch * 0.5 + s(t * 19) * 0.22, armRz: -1.85 + crouch * 0.5 - s(t * 19) * 0.22, armLx: -0.4, armRx: -0.4,
           legLx: -jump * 0.5, legRx: -jump * 0.5, legLz: jump * 0.15, legRz: -jump * 0.15,
           headX: -0.2 * jump, tail: s(t * 30) * 0.6, ears: jump * 0.5 };
+      },
+    },
+    wave: {
+      period: 1.6, // right hoof up, waving goodbye
+      pose(t) {
+        const w = s(t * TAU / 0.8), b = s(t * TAU / 1.6);
+        return { ...ZERO, hipY: abs(b) * 0.012, hipZ: b * 0.04, headZ: -0.12 + b * 0.06, headX: -0.05, headY: -0.08,
+          armRz: -1.35 + w * 0.3, armRx: -0.6, handR: w * 0.4, // out to the side and forward: straight up hides behind the head
+          armLz: 0.12 + b * 0.03, legLz: 0.04, legRz: -0.04, tail: s(t * 6) * 0.5, ears: abs(w) * 0.1 };
       },
     },
   };

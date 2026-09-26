@@ -371,6 +371,66 @@ export function ProjectorPanel({
         </>
       )}
       <p className="text-[11px] text-neutral-500">The projector view is read-only and can never fetch an unrevealed stage.</p>
+
+      {/* everything the projector's own dock can do, so you never have to touch the projector window */}
+      <OnScreenControls session={session} onChanged={onChanged} onError={onError} />
     </Section>
+  );
+}
+
+const SLIDE_SPEEDS = [0.3, 0.5, 1, 2, 3, 5, 8];
+
+/** Sound, phone QR, slideshow and clear screen for the projector, driven from here (shared server-side state). */
+function OnScreenControls({ session, onChanged, onError }: { session: SessionView; onChanged: () => void; onError: (msg: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const d = session.display;
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    try {
+      await fn();
+      onChanged();
+    } catch (e) {
+      onError(String((e as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const set = (patch: Parameters<typeof api.setDisplay>[0]) => run(() => api.setDisplay(patch));
+  const sound = d.muted ? <Pill>muted</Pill>
+    : d.soundReady === true ? <Pill tone="ok">playing on the projector</Pill>
+    : d.soundReady === false ? <Pill tone="warn">browser is holding it: click the projector window once</Pill>
+    : <Pill>no projector connected yet</Pill>;
+  return (
+    <div className="space-y-2 border-t border-neutral-800 pt-3">
+      <div className="lbl">On the projector</div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className={cx('btn', !d.muted && 'btn-primary')} disabled={busy} onClick={() => void set({ muted: !d.muted })}>
+          {d.muted ? '🔇 Sound off' : '🔊 Sound on'}
+        </button>
+        {sound}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className={cx('btn', d.qr && 'btn-primary')} disabled={busy} onClick={() => void set({ qr: !d.qr })}>
+          📱 {d.qr ? 'Hide phone QR' : 'Show phone QR'}
+        </button>
+        <button type="button" className="btn" disabled={busy || !session.selectedRunId} title="Take the run off the projector (it stays in the run list)" onClick={() => void run(() => api.selectRun(null, false))}>
+          ⏏ Clear screen
+        </button>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className={cx('btn', d.slideshow.on && 'btn-primary')} disabled={busy} onClick={() => void set({ slideshow: { on: !d.slideshow.on } })}>
+          {d.slideshow.on ? '⏸ Stop slideshow' : '▶ Slideshow'}
+        </button>
+        <select className="inp !w-auto" value={d.slideshow.filter} disabled={busy} onChange={(e) => void set({ slideshow: { filter: e.target.value as 'image' | 'text' | 'all' } })}>
+          <option value="image">images only</option>
+          <option value="text">text only</option>
+          <option value="all">everything</option>
+        </select>
+        <select className="inp !w-auto" value={d.slideshow.sec} disabled={busy} onChange={(e) => void set({ slideshow: { sec: Number(e.target.value) } })} title="Seconds per step">
+          {SLIDE_SPEEDS.map((v) => <option key={v} value={v}>{v}s per step</option>)}
+        </select>
+      </div>
+      <p className="text-[11px] text-neutral-500">These follow the projector's own dock both ways. The slideshow flips through the revealed steps.</p>
+    </div>
   );
 }
