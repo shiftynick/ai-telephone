@@ -527,7 +527,7 @@ export default function Present({ token }: { token: string }) {
 
   const running = state?.stages.some((s) => s.status === 'running');
   // the soundtrack loops while a step generates and plays a jingle each time one lands
-  useSoundtrack(!!running, state?.stages.filter((s) => s.status === 'done').length ?? 0, muted);
+  const soundOn = useSoundtrack(!!running, state?.stages.filter((s) => s.status === 'done').length ?? 0, muted);
   useEffect(() => {
     if (!running) return;
     const t = setInterval(() => setTick((n) => n + 1), 500);
@@ -829,6 +829,13 @@ export default function Present({ token }: { token: string }) {
             </button>
             <button type="button" className={cx(ghost, menuOpen && 'bg-white/10')} title="More" onClick={() => setMenuOpen((m) => !m)}>⋯</button>
           </div>
+        </div>
+      )}
+
+      {/* the browser is holding audio until this window gets a click or key press */}
+      {!soundOn && !muted && (
+        <div className="pointer-events-none absolute top-[2vh] left-1/2 z-40 -translate-x-1/2 rounded-full border border-white/15 bg-black/70 px-[1vw] py-[0.5vh] text-neutral-300 backdrop-blur" style={{ fontSize: 'clamp(10px, 0.9vw, 16px)' }}>
+          🔈 click anywhere on this window to turn on sound
         </div>
       )}
 

@@ -95,6 +95,7 @@ export function WaitingStage({ stage, elapsedSec, icon, mascot, compact }: { sta
 class Chiptune {
   ctx: AudioContext;
   out: GainNode;
+  meter: AnalyserNode;
   private timer: ReturnType<typeof setInterval> | null = null;
   private step = 0;
   private nextAt = 0;
@@ -103,7 +104,18 @@ class Chiptune {
     this.ctx = new AudioContext();
     this.out = this.ctx.createGain();
     this.out.gain.value = 0.0;
-    this.out.connect(this.ctx.destination);
+    // a compressor keeps the mix loud and punchy on TV/laptop speakers without clipping
+    const comp = this.ctx.createDynamicsCompressor();
+    comp.threshold.value = -18;
+    comp.knee.value = 8;
+    comp.ratio.value = 4;
+    comp.attack.value = 0.004;
+    comp.release.value = 0.15;
+    this.out.connect(comp).connect(this.ctx.destination);
+    // level tap, read by tests (window.__teleSoundLevel) to check the loop is actually audible
+    this.meter = this.ctx.createAnalyser();
+    this.meter.fftSize = 2048;
+    this.out.connect(this.meter);
     this.noise = this.ctx.createBuffer(1, this.ctx.sampleRate * 0.05, this.ctx.sampleRate);
     const d = this.noise.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
@@ -134,9 +146,38 @@ class Chiptune {
     s.start(at);
   }
 
+  private kick(at: number, vol: number) {
+    const o = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(150, at);
+    o.frequency.exponentialRampToValueAtTime(48, at + 0.12);
+    g.gain.setValueAtTime(vol, at);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + 0.16);
+    o.connect(g).connect(this.out);
+    o.start(at);
+    o.stop(at + 0.18);
+  }
+
+  private snare(at: number, vol: number) {
+    const s = this.ctx.createBufferSource();
+    s.buffer = this.noise;
+    const f = this.ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.frequency.value = 1900;
+    f.Q.value = 0.8;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(vol, at);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + 0.05);
+    s.connect(f).connect(g).connect(this.out);
+    s.start(at);
+  }
+
   // an original four-chord loop (C · Am · F · G), 16 sixteenths per chord
   private static CHORDS = [[60, 64, 67, 72], [57, 60, 64, 69], [53, 57, 60, 65], [55, 59, 62, 67]];
   private static ARP = [0, 1, 2, 3, 2, 1, 0, 2, 3, 2, 1, 3, 2, 0, 1, 2];
+  // an original lead motif: which chord tone (two octaves up) plays on which sixteenth; -1 = rest
+  private static LEAD = [3, -1, -1, 2, -1, -1, 1, -1, 2, -1, 3, -1, -1, -1, 2, -1];
   private static hz = (midi: number) => 440 * 2 ** ((midi - 69) / 12);
 
   start() {
@@ -144,16 +185,21 @@ class Chiptune {
     void this.ctx.resume();
     const now = this.ctx.currentTime;
     this.out.gain.cancelScheduledValues(now);
-    this.out.gain.setTargetAtTime(0.35, now, 0.4); // fade in
+    this.out.gain.setTargetAtTime(1.8, now, 0.3); // fade in (the compressor after this keeps peaks in check)
     this.nextAt = now + 0.05;
     const sixteenth = 60 / 132 / 4;
     this.timer = setInterval(() => {
       while (this.nextAt < this.ctx.currentTime + 0.25) {
         const bar = Math.floor(this.step / 16) % 4, i = this.step % 16;
         const chord = Chiptune.CHORDS[bar];
-        this.note(Chiptune.hz(chord[Chiptune.ARP[i]] + 12), this.nextAt, sixteenth * 0.9, 'square', 0.05);
-        if (i % 4 === 0) this.note(Chiptune.hz(chord[0] - 24), this.nextAt, sixteenth * 3.2, 'triangle', 0.22);
-        if (i % 2 === 1) this.hat(this.nextAt, i % 4 === 3 ? 0.05 : 0.025);
+        // levels measured with an output meter: the first mix averaged about -42 dBFS (inaudible on a TV)
+        this.note(Chiptune.hz(chord[Chiptune.ARP[i]] + 12), this.nextAt, sixteenth * 0.9, 'square', 0.09);
+        const lead = Chiptune.LEAD[i];
+        if (lead >= 0 && bar % 2 === 0) this.note(Chiptune.hz(chord[lead] + 24), this.nextAt, sixteenth * 2.2, 'triangle', 0.16);
+        if (i % 2 === 0) this.note(Chiptune.hz(chord[0] - 12), this.nextAt, sixteenth * 1.6, 'square', 0.11); // bass an octave up: small speakers can play it
+        if (i % 8 === 0) this.kick(this.nextAt, 0.7);
+        if (i % 8 === 4) this.snare(this.nextAt, 0.28);
+        if (i % 2 === 1) this.hat(this.nextAt, i % 4 === 3 ? 0.12 : 0.06);
         this.nextAt += sixteenth;
         this.step++;
       }
@@ -169,28 +215,53 @@ class Chiptune {
     this.out.gain.setTargetAtTime(0, now, 0.25); // fade out
   }
 
+  /** RMS level of the output right now (0 = silent, ~0.1+ = clearly audible). */
+  level() {
+    const buf = new Float32Array(this.meter.fftSize);
+    this.meter.getFloatTimeDomainData(buf);
+    let sum = 0;
+    for (const v of buf) sum += v * v;
+    return Math.sqrt(sum / buf.length);
+  }
+
   jingle() {
     void this.ctx.resume();
     const now = this.ctx.currentTime + 0.02;
     this.out.gain.cancelScheduledValues(now);
-    this.out.gain.setValueAtTime(0.4, now);
-    [72, 76, 79, 84].forEach((m, k) => this.note(Chiptune.hz(m), now + k * 0.08, 0.16, 'square', 0.08));
-    this.note(Chiptune.hz(88), now + 0.34, 0.45, 'triangle', 0.15);
+    this.out.gain.setValueAtTime(1.6, now);
+    [72, 76, 79, 84].forEach((m, k) => this.note(Chiptune.hz(m), now + k * 0.08, 0.16, 'square', 0.2));
+    this.note(Chiptune.hz(88), now + 0.34, 0.5, 'triangle', 0.35);
+    this.note(Chiptune.hz(76), now + 0.34, 0.5, 'square', 0.12);
   }
 }
 
 /**
  * Drives the soundtrack: loops while `playing`, a jingle each time `landed` increases, silent when muted.
- * Browsers only start audio after a user gesture, so the context is created on the first click/key.
+ * Returns whether audio is actually running (browsers may hold it until the first click in this window).
  */
 export function useSoundtrack(playing: boolean, landed: number, muted: boolean) {
   const tune = useRef<Chiptune | null>(null);
   const [ready, setReady] = useState(false);
   useEffect(() => {
-    const unlock = () => { if (!tune.current) tune.current = new Chiptune(); void tune.current.ctx.resume(); setReady(true); };
+    // Create the audio context right away: Chrome lets it run without a click once the site has had
+    // attention; otherwise it starts suspended and the first click or key press resumes it.
+    const t = new Chiptune();
+    tune.current = t;
+    (window as any).__teleSoundLevel = () => t.level();
+    const sync = () => setReady(t.ctx.state === 'running');
+    t.ctx.addEventListener('statechange', sync);
+    void t.ctx.resume().then(sync, sync);
+    const unlock = () => { void t.ctx.resume().then(sync, sync); };
     window.addEventListener('pointerdown', unlock);
     window.addEventListener('keydown', unlock);
-    return () => { window.removeEventListener('pointerdown', unlock); window.removeEventListener('keydown', unlock); };
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+      t.ctx.removeEventListener('statechange', sync);
+      t.stop();
+      void t.ctx.close();
+      tune.current = null;
+    };
   }, []);
   useEffect(() => {
     const t = tune.current;
@@ -202,6 +273,5 @@ export function useSoundtrack(playing: boolean, landed: number, muted: boolean) 
     if (landed > seen.current && !muted) tune.current?.jingle();
     seen.current = landed;
   }, [landed, muted]);
-  useEffect(() => () => { tune.current?.stop(); void tune.current?.ctx.close(); }, []);
   return ready;
 }
