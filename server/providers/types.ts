@@ -1,6 +1,6 @@
-import type { StepParams, StepType } from '../../shared/types.ts';
+import type { Provider, StepParams, StepType } from '../../shared/types.ts';
 
-export type StepInput = { kind: 'text'; text: string } | { kind: 'image'; bytes: Buffer; mime: string };
+export type StepInput = { kind: 'text'; text: string } | { kind: 'image'; bytes: Buffer; mime: string } | { kind: 'audio'; bytes: Buffer; mime: string };
 
 export type StepRequest = {
   type: StepType;
@@ -25,7 +25,8 @@ export type StepRequest = {
 export type StepOutput =
   | { kind: 'text'; text: string }
   | { kind: 'image'; bytes: Buffer }
-  | { kind: 'video'; bytes: Buffer };
+  | { kind: 'video'; bytes: Buffer }
+  | { kind: 'audio'; bytes: Buffer };
 
 export type StepResult = {
   output: StepOutput;
@@ -79,7 +80,8 @@ export interface StepAdapter {
   cancel?(modelId: string, requestId: string): Promise<void>;
 }
 
-export type Adapters = { openrouter: StepAdapter; fal: StepAdapter };
+/** openrouter + fal are required; the others default to their real implementations when not supplied (tests pass fakes). */
+export type Adapters = { openrouter: StepAdapter; fal: StepAdapter } & Partial<Record<Exclude<Provider, 'openrouter' | 'fal'>, StepAdapter>>;
 
 /** Never let a key reach logs, DB rows, or API responses. */
 export function scrub(msg: string, secrets: string[]): string {

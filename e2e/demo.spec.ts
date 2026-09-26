@@ -51,7 +51,7 @@ test('host runs the quick demo; projector follows; phone page uploads', async ({
   await projector.screenshot({ path: path.join(shots, 'projector-video.png') });
 
   // Autoplay (viewer-local): images only, skipping text and video, and Esc returns to the live stage.
-  await projector.getByRole('button', { name: /Autoplay/ }).click();
+  await projector.getByRole('button', { name: 'Autoplay' }).click();
   await expect(projector.getByText(/autoplay \d\/3/)).toBeVisible();
   await expect(projector.locator('video')).toHaveCount(0);
   await expect(projector.getByText(/autoplay 3\/3/)).toBeVisible({ timeout: 8000 });
@@ -63,7 +63,7 @@ test('host runs the quick demo; projector follows; phone page uploads', async ({
   const status = await projector.evaluate(async () => (await fetch('/api/session/reveal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"action":"reset"}' })).status);
   expect(status).toBe(401);
   // A projector viewer without the host cookie never sees the host control overlay.
-  expect(await projector.getByRole('button', { name: 'Next ▶' }).count()).toBe(0);
+  expect(await projector.getByRole('button', { name: 'Reveal next step' }).count()).toBe(0);
   await projCtx.close();
 
   // Phone page in a separate, cookie-less mobile context.

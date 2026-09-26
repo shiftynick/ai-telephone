@@ -82,3 +82,13 @@ body {
 .pbtn-danger:not(:disabled) { @apply border-red-800 text-red-300; }
 .pbtn-go:not(:disabled) { @apply border-sky-700 bg-sky-950 text-sky-100; }
 .pbtn-go:hover:not(:disabled) { @apply border-sky-400 bg-sky-900; }
+
+/* projector waiting card: indeterminate progress sweep and rotating lines */
+@keyframes slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+@keyframes fadein {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}

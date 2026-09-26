@@ -8,6 +8,7 @@ import type {
   RunView,
   StepIssue,
   StepType,
+  WordGame,
 } from '../../shared/types.ts';
 
 // ---- view models that only exist on the wire (documented in docs/API.md) ----
@@ -129,6 +130,8 @@ const json = <T,>(path: string, method: string, data?: unknown) =>
     body: data === undefined ? undefined : JSON.stringify(data),
   });
 
+export type PublicView = { available: boolean; active: { url: string; host: string; port: number } | null };
+
 export const api = {
   // auth / status
   exchange: (code: string) => json<{ ok: true }>('/api/auth/exchange', 'POST', { code }),
@@ -163,6 +166,9 @@ export const api = {
 
   // LAN
   lan: () => request<LanView>('/api/lan'),
+  /** public phone link through Tailscale Funnel (no venue Wi-Fi needed) */
+  publicLink: () => request<PublicView>('/api/public'),
+  setPublic: (on: boolean) => json<PublicView>('/api/public', 'POST', { on }),
   setLan: (address: string | null) => json<{ active: LanView['active'] }>('/api/lan', 'POST', { address }),
 
   // runs
@@ -170,15 +176,20 @@ export const api = {
   run: (id: string) => request<RunView>(`/api/runs/${id}`),
   createRun: (body: { preset: PresetBody; sourceArtifactId?: string; budgetUsd?: number | null; select?: boolean; interactive?: boolean; autoBridge?: boolean; instructionSet?: string }) =>
     json<RunView>('/api/runs', 'POST', body),
-  appendStep: (id: string, type: StepType, opts: { twist?: string; instructionSet?: string; modelId?: string; keyframes?: number | 'first_last'; reference?: 'previous' | 'first' | 'none' } = {}) =>
+  appendStep: (id: string, type: StepType, opts: { twist?: string; instructionSet?: string; game?: WordGame; tone?: string; voice?: string; modelId?: string; keyframes?: number | 'first_last'; reference?: 'previous' | 'first' | 'none' } = {}) =>
     json<RunView>(`/api/runs/${id}/steps`, 'POST', {
       type,
       ...(opts.twist ? { twist: opts.twist } : {}),
       ...(opts.instructionSet ? { instructionSet: opts.instructionSet } : {}),
+      ...(opts.game ? { game: opts.game } : {}),
+      ...(opts.tone !== undefined ? { tone: opts.tone } : {}),
+      ...(opts.voice ? { voice: opts.voice } : {}),
       ...(opts.modelId ? { modelId: opts.modelId } : {}),
       ...(opts.reference ? { reference: opts.reference } : {}),
       ...(opts.keyframes !== undefined && (opts.keyframes === 'first_last' || opts.keyframes > 1) ? { keyframes: opts.keyframes } : {}),
     }),
+  /** (re)score a run with the resemblance meter; scores arrive via SSE as they land */
+  scoreRun: (id: string, all = false) => json<{ ok: true }>(`/api/runs/${id}/resemblance`, 'POST', { all }),
   runAction: (id: string, action: RunAction, acknowledgeBilling = false) =>
     json<RunView>(`/api/runs/${id}/actions`, 'POST', { action, acknowledgeBilling }),
 

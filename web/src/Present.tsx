@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { FASTEST_MODELS, INSTRUCTION_SETS, KEYFRAME_MODELS, MAX_KEYFRAMES, PIKAFRAMES, NEXT_ACTIONS, PRESET_SCHEMA_VERSION, keyframesCount, type ModelsView, type ArtifactKind, type ArtifactView, type PresentStage, type PresentState, type RunView, type StepType } from '../../shared/types.ts';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { FASTEST_MODELS, INSTRUCTION_SETS, KEYFRAME_MODELS, MAX_KEYFRAMES, PIKAFRAMES, NEXT_ACTIONS, PRESET_SCHEMA_VERSION, keyframesCount, type ModelsView, type ArtifactKind, type ArtifactView, type PresentStage, type PresentState, type RunView, type StepType , WORD_GAMES, WORD_GAME_IDS, textForm, type WordGame , SPEECH_TONES } from '../../shared/types.ts';
 import { ALLOWED_ACTIONS, ApiError, api, mediaUrl, type RevealAction, type RunAction, type SourceCandidate } from './api.ts';
 import { cx, fmtDuration, fmtMoney } from './util.tsx';
+import { WaitingStage, useSoundtrack } from './waiting.tsx';
+import { ACTION_LABEL, WhatNextPanel, stepOptions, useAdventureSettings } from './Adventure.tsx';
 
 function VideoStage({ src, poster, autoPlay }: { src: string; poster?: string; autoPlay?: boolean }) {
   const ref = useRef<HTMLVideoElement | null>(null);
@@ -51,19 +53,106 @@ function VideoStage({ src, poster, autoPlay }: { src: string; poster?: string; a
   );
 }
 
+// Stage text at the usual size (clamp(20px, 2.8vw, 64px)), shrunk just enough that long
+// descriptions fit the stage height instead of overflowing it.
+function FitText({ text }: { text: string }) {
+  const box = useRef<HTMLDivElement | null>(null);
+  const para = useRef<HTMLParagraphElement | null>(null);
+  useLayoutEffect(() => {
+    const b = box.current, p = para.current;
+    if (!b || !p) return;
+    const fit = () => {
+      const max = Math.min(64, Math.max(20, window.innerWidth * 0.028));
+      const room = b.clientHeight * 0.94;
+      p.style.maxWidth = `${max * 36}px`; // ~70ch at full size; stays put as the font shrinks, so long text wraps wider
+      const fits = (px: number) => { p.style.fontSize = `${px}px`; return p.offsetHeight <= room; };
+      if (fits(max)) return;
+      let lo = 8, hi = max; // binary search the largest size that fits
+      while (hi - lo > 0.5) { const mid = (lo + hi) / 2; if (fits(mid)) lo = mid; else hi = mid; }
+      fits(lo);
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(b);
+    return () => ro.disconnect();
+  }, [text]);
+  return (
+    <div ref={box} className="fade-in flex h-full w-full items-center justify-center overflow-hidden px-[4vw]">
+      <p ref={para} className="text-center leading-[1.45] text-neutral-100">
+        {text}
+      </p>
+    </div>
+  );
+}
+
+/** Speech on the projector: a big live frequency ring drawn from the playing audio. */
+function AudioStage({ src, autoPlay }: { src: string; autoPlay?: boolean }) {
+  const audio = useRef<HTMLAudioElement | null>(null);
+  const canvas = useRef<HTMLCanvasElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+  useEffect(() => {
+    const a = audio.current, c = canvas.current;
+    if (!a || !c) return;
+    let ctx: AudioContext | null = null, analyser: AnalyserNode | null = null, raf = 0;
+    const setup = () => {
+      if (ctx) return;
+      ctx = new AudioContext();
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      ctx.createMediaElementSource(a).connect(analyser);
+      analyser.connect(ctx.destination);
+    };
+    const bins = new Uint8Array(128);
+    const draw = () => {
+      raf = requestAnimationFrame(draw);
+      const g = c.getContext('2d')!;
+      const w = (c.width = c.clientWidth * devicePixelRatio), h = (c.height = c.clientHeight * devicePixelRatio);
+      g.clearRect(0, 0, w, h);
+      if (analyser) analyser.getByteFrequencyData(bins); else bins.fill(0);
+      const r0 = Math.min(w, h) * 0.22, n = 96;
+      g.translate(w / 2, h / 2);
+      for (let i = 0; i < n; i++) {
+        const v = bins[Math.floor((i / n) * 96)] / 255;
+        const len = r0 * 0.08 + v * r0 * 0.9;
+        g.rotate((Math.PI * 2) / n);
+        g.fillStyle = `hsla(${190 + v * 140}, 90%, ${55 + v * 20}%, ${0.35 + v * 0.65})`;
+        g.fillRect(-Math.max(2, r0 * 0.02), r0, Math.max(4, r0 * 0.04), len);
+      }
+    };
+    const onPlay = () => { setup(); void ctx?.resume(); setPlaying(true); };
+    const onPause = () => setPlaying(false);
+    a.addEventListener('play', onPlay);
+    a.addEventListener('pause', onPause);
+    draw();
+    return () => {
+      cancelAnimationFrame(raf);
+      a.removeEventListener('play', onPlay);
+      a.removeEventListener('pause', onPause);
+      a.pause();
+      void ctx?.close();
+    };
+  }, [src]);
+  return (
+    <div className="relative flex h-full w-full items-center justify-center">
+      <canvas ref={canvas} className="absolute inset-0 h-full w-full" />
+      <button
+        type="button"
+        onClick={() => (audio.current?.paused ? void audio.current.play() : audio.current?.pause())}
+        aria-label={playing ? 'Pause speech' : 'Play speech'}
+        className="relative flex items-center justify-center rounded-full bg-white/90 text-black shadow-lg"
+        style={{ width: '12vmin', height: '12vmin', fontSize: '4.5vmin' }}
+      >
+        {playing ? '❚❚' : <span style={{ marginLeft: '0.8vmin' }}>▶</span>}
+      </button>
+      <audio ref={audio} src={src} autoPlay={autoPlay} preload="auto" />
+    </div>
+  );
+}
+
 function StageArtifact({ a, token, label, autoPlay }: { a: ArtifactView; token: string; label?: string; autoPlay?: boolean }) {
-  if (a.kind === 'text')
-    return (
-      <div className="fade-in flex h-full w-full items-center justify-center px-[4vw]">
-        <p
-          className="text-center leading-[1.45] text-neutral-100"
-          style={{ fontSize: 'clamp(20px, 2.8vw, 64px)', maxWidth: '70ch' }}
-        >
-          {a.text}
-        </p>
-      </div>
-    );
+  if (a.kind === 'text') return <FitText text={a.text ?? ''} />;
   if (a.kind === 'video') return <VideoStage src={mediaUrl(a.id, token)} autoPlay={autoPlay} />;
+  if (a.kind === 'audio') return <AudioStage src={mediaUrl(a.id, token)} autoPlay={autoPlay} />;
   return (
     <img
       key={a.id}
@@ -77,13 +166,6 @@ function StageArtifact({ a, token, label, autoPlay }: { a: ArtifactView; token: 
 const SPEEDS = [0.3, 0.5, 1, 2, 3, 5, 8];
 type SlideFilter = 'all' | 'image' | 'text';
 
-const ACTION_LABEL: Record<StepType, string> = {
-  image_to_text: '📝 Describe it',
-  image_to_video: '🎬 Animate it',
-  text_to_image: '🎨 Draw it',
-  text_to_text: '🔁 Retell it',
-  text_to_video: '🎥 Film it',
-};
 
 /** Host-only: choose what an adventure starts from. Choosing costs nothing; the first action does. */
 function AdventureStart({ onPick, onText, onFile, onClose, busy }: {
@@ -149,6 +231,57 @@ function AdventureStart({ onPick, onText, onFile, onClose, busy }: {
   );
 }
 
+/** One glyph per step type, for the step strip. */
+const STAGE_ICON: Record<StepType, string> = {
+  image_to_text: '📝', text_to_image: '🎨', text_to_text: '🔁', image_to_video: '🎬', text_to_video: '🎥',
+  text_to_svg: '✏️', image_to_svg: '✏️', text_to_ascii: '⌨️', text_to_code_image: '🧊', text_to_code_video: '🎞️',
+  text_to_audio: '🔊', audio_to_text: '👂',
+};
+const stageIcon = (s: PresentStage) => (s.type ? STAGE_ICON[s.type] : s.kind === 'text' ? '✍️' : '📷');
+const scoreOf = (s?: PresentStage | null): number | null =>
+  s?.resemblance && (s.resemblance.status === 'done' || s.resemblance.status === 'carried') ? s.resemblance.score : null;
+/** 0 = hot (orange-red, drifted away) … 100 = cool cyan (still the original) */
+const scoreColor = (v: number) => `hsl(${Math.round(8 + v * 1.8)}, 85%, 60%)`;
+
+/** The resemblance meter: how much of the ORIGINAL survives in the stage on screen, plus the drift so far. */
+function Meter({ stages, shown }: { stages: PresentStage[]; shown: PresentStage | null }) {
+  const pts = stages
+    .filter((s) => s.revealed)
+    .map((s) => ({ stage: s.stage, v: scoreOf(s) }))
+    .filter((p): p is { stage: number; v: number } => p.v !== null);
+  const r = shown?.resemblance;
+  const v = scoreOf(shown);
+  if (!shown || !r) return null;
+  const W = 240, H = 48, last = Math.max(1, stages.length - 1);
+  const x = (st: number) => 5 + (st / last) * (W - 10);
+  const y = (val: number) => H - 5 - (val / 100) * (H - 10);
+  const note = r.status === 'carried' ? 'spoken aloud: keeps what its text kept' : r.lost && !/^nothing/i.test(r.lost) ? `lost: ${r.lost}` : null;
+  return (
+    <div className="text-right" style={{ width: 'clamp(170px, 18vw, 360px)' }}>
+      <div className="tracking-[0.22em] text-neutral-500 uppercase" style={{ fontSize: 'clamp(8px, 0.7vw, 13px)' }}>resemblance to original</div>
+      <div className="mt-[0.3vh] leading-none" title={r.aspects ? Object.entries(r.aspects).map(([k, n]) => `${k} ${n}`).join(' · ') : r.error}>
+        {r.status === 'scoring' ? (
+          <span className="animate-pulse text-neutral-500" style={{ fontSize: 'clamp(14px, 1.6vw, 30px)' }}>judging…</span>
+        ) : v !== null ? (
+          <span className="font-semibold tabular-nums transition-colors" style={{ fontSize: 'clamp(26px, 3.4vw, 64px)', color: scoreColor(v) }}>{v}%</span>
+        ) : (
+          <span className="text-neutral-600" style={{ fontSize: 'clamp(12px, 1.2vw, 22px)' }}>no score</span>
+        )}
+      </div>
+      {pts.length > 1 && (
+        <svg viewBox={`0 0 ${W} ${H}`} className="mt-[0.6vh] h-auto w-full overflow-visible">
+          <line x1={5} x2={W - 5} y1={y(100)} y2={y(100)} stroke="rgba(255,255,255,.08)" />
+          <polyline points={pts.map((p) => `${x(p.stage)},${y(p.v)}`).join(' ')} fill="none" stroke="rgba(255,255,255,.3)" strokeWidth="1.5" />
+          {pts.map((p) => (
+            <circle key={p.stage} cx={x(p.stage)} cy={y(p.v)} r={p.stage === shown.stage ? 4.5 : 2.6} fill={scoreColor(p.v)} stroke={p.stage === shown.stage ? '#fff' : 'none'} strokeWidth="1.5" />
+          ))}
+        </svg>
+      )}
+      {note && <div className="mt-[0.3vh] truncate text-neutral-400 italic" style={{ fontSize: 'clamp(9px, 0.85vw, 16px)' }}>{note}</div>}
+    </div>
+  );
+}
+
 export default function Present({ token }: { token: string }) {
   const [state, setState] = useState<PresentState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -166,18 +299,9 @@ export default function Present({ token }: { token: string }) {
   const [showControls, setShowControls] = useState(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [startOpen, setStartOpen] = useState(false);
-  const [twist, setTwist] = useState('');
-  const [advSet, setAdvSet] = useState('faithful');
-  // Model per action type for the NEXT step ('' = fastest tested). Remembered across reloads.
+  // adventure settings (shared with the host console's What next panel)
+  const adv = useAdventureSettings();
   const [models, setModels] = useState<ModelsView | null>(null);
-  const [advModels, setAdvModels] = useState<Partial<Record<StepType, string>>>(() => {
-    try { return JSON.parse(localStorage.getItem('tele.advModels') ?? '{}'); } catch { return {}; }
-  });
-  const pickModel = (type: StepType, id: string) => setAdvModels((m) => {
-    const next = { ...m, [type]: id };
-    localStorage.setItem('tele.advModels', JSON.stringify(next));
-    return next;
-  });
   useEffect(() => {
     if (!isHost) return;
     let alive = true;
@@ -188,18 +312,20 @@ export default function Present({ token }: { token: string }) {
   const [autoOn, setAutoOn] = useState(false);
   const [autoFilter, setAutoFilter] = useState<SlideFilter>(() => (localStorage.getItem('tele.autoFilter') as SlideFilter) || 'image');
   const [autoSec, setAutoSec] = useState(() => Number(localStorage.getItem('tele.autoSec')) || 2);
-  const [advFrames, setAdvFrames] = useState<number | 'first_last'>(1);
-  const [advRef, setAdvRef] = useState<'' | 'previous' | 'first' | 'none'>(''); // '' = whatever the instruction set does
-  const bottomRef = useRef<HTMLDivElement | null>(null);
-  const [bottomH, setBottomH] = useState(0);
+  const [advOpen, setAdvOpen] = useState(false); // the "What next?" panel, opened by hand
+  const [advClosed, setAdvClosed] = useState(false); // closed by hand: an idle adventure no longer pops it open
+  const [menuOpen, setMenuOpen] = useState(false); // the ⋯ menu in the dock
+  const [muted, setMuted] = useState(() => localStorage.getItem('tele.muted') === '1');
+  const stripRef = useRef<HTMLDivElement | null>(null);
+  const [stripH, setStripH] = useState(0);
 
-  // The detail view must clear the bottom bars whatever their height (one row, two rows, wrapped).
+  // The detail view and the floating dock sit just above the step strip, whatever its height.
   useEffect(() => {
-    const el = bottomRef.current;
+    const el = stripRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setBottomH(el.offsetHeight));
+    const ro = new ResizeObserver(() => setStripH(el.offsetHeight));
     ro.observe(el);
-    setBottomH(el.offsetHeight);
+    setStripH(el.offsetHeight);
     return () => ro.disconnect();
   });
 
@@ -316,6 +442,7 @@ export default function Present({ token }: { token: string }) {
     });
     setRun(v);
     setRunId(v.id);
+    setAdvClosed(false);
     setDetailStage(null);
     setState(await api.presentState(token));
     return v;
@@ -338,7 +465,7 @@ export default function Present({ token }: { token: string }) {
     setRun(null);
     setRunId(null);
     setDetailStage(null);
-    setTwist('');
+    adv.setTwist('');
     setState(await api.presentState(token));
   });
   const startChooser = startOpen && isHost ? <AdventureStart busy={busy} onPick={beginFrom} onText={beginFromText} onFile={beginFromFile} onClose={() => setStartOpen(false)} /> : null;
@@ -356,7 +483,7 @@ export default function Present({ token }: { token: string }) {
     const at = slides.find((s) => s.stage === detailStage);
     const next = (slides.find((s) => s.stage > (detailStage ?? -1)) ?? slides[0]).stage;
     // a video gets at least its own length; everything else the chosen speed
-    const dwell = at ? Math.max(autoSec, at.kind === 'video' ? (at.artifact?.durationSec ?? 0) : 0) * 1000 : 0;
+    const dwell = at ? Math.max(autoSec, at.kind === 'video' || at.kind === 'audio' ? (at.artifact?.durationSec ?? 0) : 0) * 1000 : 0;
     const t = setTimeout(() => setDetailStage(next), dwell);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -381,7 +508,7 @@ export default function Present({ token }: { token: string }) {
       if (!state?.hasRun) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
-      if (e.key === 'Escape') return stopAuto();
+      if (e.key === 'Escape') { setMenuOpen(false); setAdvOpen(false); setAdvClosed(true); adv.setPick(null); return stopAuto(); }
       if (e.key === ' ') { e.preventDefault(); return autoOn ? stopAuto() : setAutoOn(true); }
       if (e.key === '+' || e.key === '=') return speed(1);
       if (e.key === '-') return speed(-1);
@@ -399,6 +526,8 @@ export default function Present({ token }: { token: string }) {
   }, [state, detailStage, isHost, reveal, autoOn]);
 
   const running = state?.stages.some((s) => s.status === 'running');
+  // the soundtrack loops while a step generates and plays a jingle each time one lands
+  useSoundtrack(!!running, state?.stages.filter((s) => s.status === 'done').length ?? 0, muted);
   useEffect(() => {
     if (!running) return;
     const t = setInterval(() => setTick((n) => n + 1), 500);
@@ -456,25 +585,42 @@ export default function Present({ token }: { token: string }) {
   const onScreen = state.compare ? null : (detail ?? (current?.revealed && current.artifact ? current : null));
   const runIdle = !!run && ['ready', 'paused', 'completed'].includes(run.status) && run.currentStepIndex >= run.steps.length;
   const atTip = !!run?.interactive && !!onScreen && onScreen.stage === stages.length - 1 && runIdle;
-  const actions = onScreen ? NEXT_ACTIONS[onScreen.kind] : [];
-  const choose = (type: StepType) => guarded(async () => {
+  const choose = (type: StepType, game?: WordGame) => guarded(async () => {
     if (!onScreen?.artifact) return;
     const target = atTip && run ? run.id : (await newAdventure(onScreen.artifact.id, onScreen.kind)).id;
-    setRun(await api.appendStep(target, type, { twist: twist.trim() || undefined, instructionSet: advSet, modelId: type === 'image_to_video' && keyframesCount(advFrames) > (KEYFRAME_MODELS[advModels[type] || FASTEST_MODELS[type]] ?? 1) ? PIKAFRAMES : advModels[type] || undefined,
-      keyframes: type === 'image_to_video' ? advFrames : undefined,
-      reference: type === 'text_to_image' && advRef ? advRef : undefined,
-    }));
-    setTwist('');
+    setRun(await api.appendStep(target, type, stepOptions(adv, type, game)));
+    adv.setTwist('');
+    adv.setPick(null);
     setDetailStage(null);
   });
 
   const elapsedOf = (s: PresentStage) => (s.startedAt ? Math.max(0, Math.floor((Date.now() - offset - s.startedAt) / 1000)) : 0);
 
+  // Run control collapses to ONE contextual button (plus Next step and Stop).
+  const allowed = (a: RunAction) =>
+    !!run && ALLOWED_ACTIONS[run.status].includes(a) &&
+    // an adventure with no pending step has nothing to start; its actions live in the What next panel
+    !(run.interactive && a !== 'stop' && a !== 'pause' && a !== 'retry' && run.currentStepIndex >= run.steps.length);
+  const primary: { a: RunAction; label: string } | null = !run ? null
+    : run.status === 'running' ? { a: 'pause', label: '⏸ Pause' }
+    : run.status === 'failed' ? { a: 'retry', label: '↻ Retry' }
+    : run.status === 'paused' ? { a: 'resume', label: '▶ Resume' }
+    : run.status === 'ready' ? { a: 'start', label: '▶ Start' }
+    : null;
+  const shown = detail ?? (state.compare ? finalRevealed : current);
+  // an idle adventure opens the panel by itself, unless the host closed it; it can always be closed
+  const panelShown = isHost && !!onScreen && (advOpen || (!!run?.interactive && runIdle && !advClosed));
+  const closePanel = () => { setAdvOpen(false); setAdvClosed(true); adv.setPick(null); };
+  const dockShown = showControls || pinned || busy || menuOpen || panelShown;
+  const chip = 'rounded-lg px-[0.7vw] py-[0.55vh] transition-colors disabled:cursor-not-allowed disabled:opacity-35';
+  const ghost = `${chip} text-neutral-200 hover:bg-white/10`;
+  const divider = <span className="mx-[0.3vw] h-[2.4vh] w-px bg-white/10" />;
+
   return (
     <div className="relative flex h-full flex-col bg-[#0a0a0a] text-neutral-100">
-      {/* top-left chrome */}
-      <div className="flex items-start justify-between px-[2vw] pt-[2vh]">
-        <div>
+      {/* top chrome: what is on screen (left), how much of the original survives (right) */}
+      <div className="flex items-start justify-between gap-[2vw] px-[2vw] pt-[2vh]">
+        <div className="min-w-0">
           <div className="font-medium text-neutral-200" style={{ fontSize: 'clamp(13px, 1.5vw, 26px)' }}>
             {state.compare ? 'Start vs final' : label}
           </div>
@@ -482,11 +628,14 @@ export default function Present({ token }: { token: string }) {
             {state.compare ? `${total} transformations` : (current.modelId ?? '')}
           </div>
         </div>
-        {state.replay && (
-          <div className="rounded border border-amber-700 px-[1vw] py-[0.4vh] tracking-widest text-amber-300 uppercase" style={{ fontSize: 'clamp(10px, 1vw, 18px)' }}>
-            Replay
-          </div>
-        )}
+        <div className="flex items-start gap-[1.2vw]">
+          {state.replay && (
+            <div className="rounded border border-amber-700 px-[0.8vw] py-[0.3vh] tracking-widest text-amber-300 uppercase" style={{ fontSize: 'clamp(9px, 0.8vw, 15px)' }}>
+              Replay
+            </div>
+          )}
+          <Meter stages={stages} shown={shown} />
+        </div>
       </div>
 
       {/* stage */}
@@ -500,6 +649,7 @@ export default function Present({ token }: { token: string }) {
               <div key={name} className="flex min-h-0 flex-col">
                 <div className="mb-[1vh] text-center tracking-widest text-neutral-500 uppercase" style={{ fontSize: 'clamp(10px, 1vw, 18px)' }}>
                   {name}
+                  {scoreOf(s) !== null && name === 'Final' && <span className="ml-[0.6vw] tabular-nums" style={{ color: scoreColor(scoreOf(s)!) }}>{scoreOf(s)}%</span>}
                 </div>
                 <div className="min-h-0 flex-1">
                   {s?.artifact ? <StageArtifact key={s.artifact.id} a={s.artifact} token={token} label={name} /> : <div className="h-full" />}
@@ -508,18 +658,24 @@ export default function Present({ token }: { token: string }) {
             ))}
           </div>
         ) : current.revealed && current.artifact ? (
-          <StageArtifact key={current.artifact.id} a={current.artifact} token={token} label={label} />
+          runningStage && runningStage.stage > current.stage ? (
+            // the next step is generating: show what it is working from next to the waiting card
+            <div className="grid h-full grid-cols-[1.35fr_1fr] gap-[2.5vw]">
+              <div className="flex min-h-0 flex-col">
+                <div className="mb-[1vh] tracking-[0.2em] text-neutral-500 uppercase" style={{ fontSize: 'clamp(9px, 0.8vw, 15px)' }}>
+                  {runningStage.stage === current.stage + 1 ? 'what it’s working from' : 'on screen'} · {current.stage === 0 ? 'the start' : `step ${current.stage}`}
+                </div>
+                <div className="min-h-0 flex-1 opacity-90">
+                  <StageArtifact key={current.artifact.id} a={current.artifact} token={token} label={label} />
+                </div>
+              </div>
+              <WaitingStage compact stage={runningStage} elapsedSec={elapsedOf(runningStage)} icon={stageIcon(runningStage)} />
+            </div>
+          ) : (
+            <StageArtifact key={current.artifact.id} a={current.artifact} token={token} label={label} />
+          )
         ) : runningStage ? (
-          <div className="flex h-full flex-col items-center justify-center text-center text-neutral-400">
-            <div style={{ fontSize: 'clamp(20px, 3vw, 56px)' }}>Generating step {runningStage.stage}…</div>
-            <div className="mt-[1.5vh] font-mono text-neutral-500" style={{ fontSize: 'clamp(14px, 1.8vw, 32px)' }}>
-              {elapsedOf(runningStage)}s
-            </div>
-            <div className="mt-[1vh] text-neutral-600" style={{ fontSize: 'clamp(11px, 1.1vw, 20px)' }}>
-              {runningStage.label}
-              {runningStage.modelId ? ` · ${runningStage.modelId}` : ''}
-            </div>
-          </div>
+          <WaitingStage stage={runningStage} elapsedSec={elapsedOf(runningStage)} icon={stageIcon(runningStage)} />
         ) : (
           <div className="flex h-full items-center justify-center text-neutral-700" style={{ fontSize: 'clamp(16px, 2vw, 36px)' }}>
             ·
@@ -527,214 +683,154 @@ export default function Present({ token }: { token: string }) {
         )}
       </div>
 
-      <div ref={bottomRef} className="relative z-30">
-      {/* host-only controls: present only when this browser holds the host cookie */}
-      {isHost && (
-        <div
-          className={cx(
-            'relative z-30 bg-[#0a0a0a]/95 px-[2vw] transition-opacity duration-300',
-            showControls || pinned || busy || run?.interactive ? 'opacity-100' : 'pointer-events-none opacity-0',
-          )}
-          onMouseEnter={() => setShowControls(true)}
+      {/* step strip: always visible. One chip per stage: icon, number, and a bar coloured by its resemblance. */}
+      <div ref={stripRef} className="relative z-30 flex items-stretch justify-center gap-[0.35vw] overflow-x-auto bg-[#0a0a0a] px-[2vw] pt-[0.6vh] pb-[1.4vh]">
+        <button
+          type="button"
+          className={cx('flex shrink-0 flex-col items-center justify-center rounded-lg px-[0.7vw] text-neutral-300 hover:bg-white/10 disabled:opacity-30', autoOn && 'bg-sky-950 text-sky-200')}
+          disabled={!autoOn && slides.length < 2}
+          aria-label={autoOn ? 'Stop autoplay' : 'Autoplay'}
+          title={`Autoplay the revealed ${autoFilter === 'all' ? 'steps' : `${autoFilter} steps`} (Space) · ${autoSec}s each (−/+). Local to this window.`}
+          onClick={() => (autoOn ? stopAuto() : setAutoOn(true))}
+          style={{ fontSize: 'clamp(9px, 0.8vw, 15px)' }}
         >
-          {actionError && (
-            <div className="mb-[0.6vh] truncate rounded bg-red-950 px-2 py-1 text-red-200" style={{ fontSize: 'clamp(9px, 0.85vw, 15px)' }}>
-              {actionError}
-            </div>
-          )}
-          <div className="flex flex-wrap items-center gap-[0.5vw] pb-[0.8vh]" style={{ fontSize: 'clamp(9px, 0.85vw, 15px)' }}>
-            <span className="tracking-widest text-neutral-500 uppercase">Reveal</span>
-            <button type="button" className="pbtn" disabled={busy} onClick={() => void reveal({ action: 'prev' })}>◀ Prev</button>
-            <button type="button" className="pbtn" disabled={busy} onClick={() => void reveal({ action: 'next' })}>Next ▶</button>
-            <button type="button" className="pbtn" disabled={busy} onClick={() => void reveal({ action: 'final' })}>Final</button>
-            <button type="button" className={cx('pbtn', state.compare && 'pbtn-on')} disabled={busy} onClick={() => void reveal({ action: 'compare', on: !state.compare })}>Compare</button>
-            <button type="button" className="pbtn" disabled={busy} onClick={() => void reveal({ action: 'reset' })}>Hide all</button>
-            <button
-              type="button"
-              className="pbtn pbtn-danger"
-              disabled={busy || run?.status === 'running'}
-              title="Take this run off the projector and return to the title screen. The run stays in the run list."
-              onClick={() => void clearProjector()}
-            >
-              ⏏ Clear screen
-            </button>
-
-            <span className="ml-[1.5vw] tracking-widest text-neutral-500 uppercase">Run</span>
-            {run ? (
-              (['start', 'pause', 'resume', 'next', 'stop', 'retry'] as RunAction[]).map((a) => (
-                <button
-                  key={a}
-                  type="button"
-                  className={cx('pbtn', a === 'stop' && 'pbtn-danger')}
-                  // an adventure with no pending step has nothing to start; its actions live in the row below
-                  disabled={busy || !ALLOWED_ACTIONS[run.status].includes(a) || (!!run.interactive && a !== 'stop' && a !== 'pause' && a !== 'retry' && run.currentStepIndex >= run.steps.length)}
-                  onClick={() => void act(a)}
-                >
-                  {a === 'next' ? 'Next step' : a === 'pause' ? 'Pause' : a[0].toUpperCase() + a.slice(1)}
-                </button>
-              ))
-            ) : (
-              <span className="text-neutral-600">no run selected — choose one in the host console</span>
-            )}
-
-            {run && (
-              <span className="ml-auto flex items-center gap-[1vw] text-neutral-400">
-                <span className={cx(run.status === 'failed' ? 'text-red-400' : run.status === 'running' ? 'text-sky-300' : 'text-neutral-300')}>{run.status}</span>
-                <span>step {Math.min(run.currentStepIndex + (run.status === 'running' ? 1 : 0), run.steps.length)}/{run.steps.length}</span>
-                {run.startedAt && <span>{fmtDuration((run.finishedAt ?? Date.now() - offset) - run.startedAt)}</span>}
-                <span>
-                  {fmtMoney(run.costActualUsd + run.costEstimatedUsd)}
-                  {run.costUnknownCount > 0 ? ` +${run.costUnknownCount} unknown` : ''}
-                </span>
-                <span className="text-neutral-600">{pinned ? 'pinned (c)' : 'c = pin'}</span>
-              </span>
-            )}
-          </div>
-          {run?.statusReason && (
-            <div className="truncate pb-[0.8vh] text-amber-300" style={{ fontSize: 'clamp(9px, 0.8vw, 14px)' }}>{run.statusReason}</div>
-          )}
-          {/* adventure: pick the next action for whatever is on screen, as many times as you like */}
-          <div className="flex flex-wrap items-center gap-[0.5vw] pb-[0.8vh]" style={{ fontSize: 'clamp(9px, 0.85vw, 15px)' }}>
-            <span className="tracking-widest text-neutral-500 uppercase">Adventure</span>
-            <button type="button" className="pbtn" disabled={busy} onClick={() => setStartOpen(true)}>✨ New…</button>
-            {onScreen && actions.length > 0 && (
-              <>
-                <span className="ml-[1vw] text-neutral-500">next:</span>
-                {actions.map((t) => {
-                  const options = (models?.models ?? []).filter((m) => m.stepTypes.includes(t) && (m.favorite || m.id === advModels[t]));
-                  const chosen = advModels[t] ?? '';
-                  return (
-                    <span key={t} className="inline-flex items-stretch">
-                      <button type="button" className="pbtn pbtn-go rounded-r-none" disabled={busy || run?.status === 'running'} onClick={() => void choose(t)}>
-                        {ACTION_LABEL[t]}
-                      </button>
-                      <select
-                        value={chosen}
-                        title={`Model for "${ACTION_LABEL[t]}"`}
-                        onChange={(e) => {
-                          if (e.target.value !== '__other') return pickModel(t, e.target.value);
-                          const id = window.prompt('Model ID (checked against the catalog when the step is added):', chosen)?.trim();
-                          if (id) pickModel(t, id);
-                        }}
-                        className="max-w-[11vw] rounded-r border border-l-0 border-sky-800 bg-neutral-900 px-[0.3vw] text-neutral-300"
-                      >
-                        <option value="">fastest · {FASTEST_MODELS[t].split('/').pop()}</option>
-                        {options.filter((m) => m.id !== FASTEST_MODELS[t]).map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.id.split('/').slice(-1)[0]}{m.testState === 'failed' ? ' (failed test)' : m.testState === 'catalog-only' ? ' (untested)' : ''}
-                          </option>
-                        ))}
-                        {chosen && !options.some((m) => m.id === chosen) && <option value={chosen}>{chosen}</option>}
-                        <option value="__other">other…</option>
-                      </select>
-                    </span>
-                  );
-                })}
-                {actions.includes('text_to_image') && (
-                  <select
-                    value={advRef}
-                    onChange={(e) => setAdvRef(e.target.value as typeof advRef)}
-                    title="Reference image for Draw it: also show the model an earlier image of this run so characters and style stay consistent. A deliberate exception to the telephone rule."
-                    className={cx('rounded border bg-neutral-900 px-[0.4vw] py-[0.45vh]', advRef === 'previous' || advRef === 'first' ? 'border-amber-600 text-amber-200' : 'border-neutral-700 text-neutral-100')}
-                  >
-                    <option value="">🖼 ref: per instruction set</option>
-                    <option value="previous">🖼 ref: previous image</option>
-                    <option value="first">🖼 ref: first image</option>
-                    <option value="none">🖼 ref: off</option>
-                  </select>
-                )}
-                {actions.includes('image_to_video') && (
-                  <select
-                    value={advFrames}
-                    onChange={(e) => setAdvFrames(e.target.value === 'first_last' ? 'first_last' : Number(e.target.value))}
-                    title="Keyframes for Animate it: also send earlier images of the run as keyframes. First + last sends the run's first image and its previous image. 3+ uses Pika Pikaframes. A deliberate exception to the telephone rule."
-                    className={cx('rounded border bg-neutral-900 px-[0.4vw] py-[0.45vh]', keyframesCount(advFrames) > 1 ? 'border-amber-600 text-amber-200' : 'border-neutral-700 text-neutral-100')}
-                  >
-                    {Array.from({ length: MAX_KEYFRAMES }, (_, k) => k + 1).map((n) => (
-                      <option key={n} value={n}>{n === 1 ? '🎞 1 frame' : `🎞 ${n} keyframes`}</option>
-                    ))}
-                    <option value="first_last">🎞 first + last frames</option>
-                  </select>
-                )}
-                <select
-                  value={advSet}
-                  onChange={(e) => setAdvSet(e.target.value)}
-                  title="Instruction set used for the next action"
-                  className="rounded border border-neutral-700 bg-neutral-900 px-[0.4vw] py-[0.45vh] text-neutral-100"
-                >
-                  {INSTRUCTION_SETS.map((x) => (
-                    <option key={x.id} value={x.id}>{x.name}</option>
-                  ))}
-                </select>
-                <input
-                  value={twist}
-                  onChange={(e) => setTwist(e.target.value.slice(0, 500))}
-                  placeholder="optional twist, e.g. as a watercolour"
-                  className="min-w-[14vw] flex-1 rounded border border-neutral-700 bg-neutral-900 px-[0.6vw] py-[0.45vh] text-neutral-100 placeholder:text-neutral-600"
-                />
-                {!atTip && <span className="text-sky-300">starts a new branch from this step</span>}
-              </>
-            )}
-            {onScreen?.kind === 'video' && <span className="ml-[1vw] text-neutral-400">A video ends this path. Open an earlier step below to branch from it.</span>}
-            {run?.status === 'running' && <span className="ml-[1vw] animate-pulse text-sky-300">working…</span>}
-          </div>
-        </div>
-      )}
-
-      {/* step bar: always visible, above the detail view, for flipping through revealed steps */}
-      <div className="relative z-30 flex items-stretch gap-[0.5vw] overflow-x-auto bg-[#0a0a0a] px-[2vw] pt-[0.8vh] pb-[1.6vh]">
-        <div className="flex shrink-0 items-stretch gap-[0.3vw]" style={{ fontSize: 'clamp(9px, 0.85vw, 16px)' }}>
-          <button
-            type="button"
-            className={cx('pbtn', autoOn && 'pbtn-on')}
-            disabled={!autoOn && slides.length < 2}
-            title="Autoplay through the revealed steps (Space). Local to this window."
-            onClick={() => (autoOn ? stopAuto() : setAutoOn(true))}
-          >
-            {autoOn ? '⏸' : '▶'} Autoplay
-          </button>
-          <select
-            value={autoFilter}
-            title="Which steps autoplay shows"
-            onChange={(e) => { localStorage.setItem('tele.autoFilter', e.target.value); setAutoFilter(e.target.value as SlideFilter); }}
-            className="rounded border border-neutral-700 bg-neutral-900 px-[0.3vw] text-neutral-300"
-          >
-            <option value="image">images only</option>
-            <option value="text">text only</option>
-            <option value="all">everything</option>
-          </select>
-          <button type="button" className="pbtn" title="Slower (−)" onClick={() => speed(-1)}>−</button>
-          <span className="flex min-w-[3.2vw] items-center justify-center font-mono text-neutral-300" title="Seconds per step">{autoSec}s</span>
-          <button type="button" className="pbtn" title="Faster (+)" onClick={() => speed(1)}>+</button>
-        </div>
+          <span style={{ fontSize: 'clamp(12px, 1.1vw, 20px)' }}>{autoOn ? '⏸' : '▶'}</span>
+          <span className="font-mono text-neutral-500">{autoSec}s</span>
+        </button>
         {stages.map((s) => {
           const isHostStage = s.stage === state.currentStage && !state.compare;
           const isViewing = detail ? detail.stage === s.stage : isHostStage;
-          const tone = s.revealed
-            ? 'bg-neutral-800 text-neutral-200 hover:bg-neutral-700'
-            : s.status === 'running'
-              ? 'bg-sky-950 text-sky-300 animate-pulse'
-              : s.status === 'failed'
-                ? 'bg-red-950 text-red-300'
-                : 'bg-neutral-900 text-neutral-600';
+          const v = s.revealed ? scoreOf(s) : null;
           return (
             <button
               key={s.stage}
               type="button"
               disabled={!s.revealed}
-              // long adventures scroll sideways: keep the step being shown in view
+              // long runs scroll sideways: keep the step being shown in view
               ref={isViewing ? (el) => el?.scrollIntoView({ block: 'nearest', inline: 'nearest' }) : undefined}
               onClick={() => { setAutoOn(false); setDetailStage(detail?.stage === s.stage ? null : s.stage); }}
-              title={s.revealed ? `${s.label} — view with its exact instruction (←/→ to flip, Esc to return)` : 'not revealed yet'}
-              className={cx('min-w-[7vw] flex-1 truncate rounded px-[0.4vw] py-[0.6vh] text-center transition-colors', tone, isViewing && 'ring-2 ring-sky-400', s.revealed && 'cursor-pointer')}
-              style={{ fontSize: 'clamp(9px, 0.85vw, 16px)' }}
+              title={s.revealed ? `${s.stage === 0 ? 'Start' : `${s.stage} · ${s.label}`}${s.modelId ? ` · ${s.modelId}` : ''}${v !== null ? ` · ${v}% of the original` : ''} (←/→ to flip, Esc to return)` : s.status === 'running' ? 'generating…' : 'not revealed yet'}
+              className={cx(
+                'relative flex max-w-[5.5vw] min-w-[3.2vw] flex-1 flex-col items-center rounded-lg px-[0.3vw] pt-[0.5vh] pb-[1vh] transition-colors',
+                s.revealed ? 'cursor-pointer bg-white/[0.04] hover:bg-white/10' : 'bg-transparent',
+                isViewing && 'bg-white/15 ring-1 ring-white/60',
+                s.status === 'running' && 'animate-pulse bg-sky-950/60',
+                s.status === 'failed' && 'bg-red-950/60',
+              )}
             >
-              {s.stage === 0 ? 'Start' : `${s.stage} · ${s.label}`}
+              <span className={cx(!s.revealed && 'opacity-25 grayscale')} style={{ fontSize: 'clamp(12px, 1.15vw, 22px)' }}>{stageIcon(s)}</span>
+              <span className="font-mono text-neutral-500" style={{ fontSize: 'clamp(8px, 0.62vw, 12px)' }}>{s.stage === 0 ? 'start' : s.stage}</span>
+              <span className="absolute inset-x-[18%] bottom-[0.45vh] h-[3px] overflow-hidden rounded-full bg-white/10">
+                <i className="block h-full rounded-full transition-all duration-700" style={{ width: `${v ?? 0}%`, background: v !== null ? scoreColor(v) : 'transparent' }} />
+              </span>
             </button>
           );
         })}
       </div>
-      </div>
+
+      {/* host-only floating controls: present only when this browser holds the host cookie; fade when the mouse rests */}
+      {isHost && (
+        <div
+          className={cx('pointer-events-none absolute inset-x-0 z-40 flex flex-col items-center gap-[0.8vh] px-[2vw] transition-opacity duration-300', dockShown ? 'opacity-100' : 'opacity-0')}
+          style={{ bottom: stripH + 6, fontSize: 'clamp(9px, 0.85vw, 15px)' }}
+        >
+          {actionError && (
+            <div className="pointer-events-auto max-w-[80vw] truncate rounded-full bg-red-950/90 px-[1vw] py-[0.4vh] text-red-200" title={actionError}>{actionError}</div>
+          )}
+          {run?.statusReason && (run.status === 'failed' || run.status === 'paused') && (
+            <div className="max-w-[80vw] truncate rounded-full bg-amber-950/80 px-[1vw] py-[0.4vh] text-amber-200" title={run.statusReason}>{run.statusReason}</div>
+          )}
+
+          {/* What next? — the shared adventure panel (the host console shows the same one) */}
+          {panelShown && onScreen && (
+            <WhatNextPanel onScreen={onScreen} atTip={atTip} working={run?.status === 'running'} busy={busy} models={models} s={adv} onGo={(t, g) => void choose(t, g)} onClose={closePanel} className={dockShown ? 'pointer-events-auto' : undefined} />
+          )}
+
+          {/* the ⋯ menu: everything that is not needed every few seconds */}
+          {menuOpen && (
+            <div className={cx('flex flex-wrap items-center justify-center gap-[0.4vw] rounded-2xl border border-white/10 bg-neutral-950/90 px-[0.8vw] py-[0.7vh] shadow-2xl backdrop-blur', dockShown && 'pointer-events-auto')}>
+              <button type="button" className={ghost} disabled={busy} onClick={() => { setMenuOpen(false); setStartOpen(true); }}>✨ New adventure…</button>
+              <button type="button" className={ghost} disabled={busy} onClick={() => void reveal({ action: 'reset' })}>Hide all</button>
+              {divider}
+              <span className="text-neutral-500">autoplay</span>
+              <select
+                value={autoFilter}
+                onChange={(e) => { localStorage.setItem('tele.autoFilter', e.target.value); setAutoFilter(e.target.value as SlideFilter); }}
+                className="rounded border border-neutral-700 bg-neutral-900 px-[0.3vw] py-[0.2vh] text-neutral-200"
+              >
+                <option value="image">images only</option>
+                <option value="text">text only</option>
+                <option value="all">everything</option>
+              </select>
+              <button type="button" className={ghost} title="Slower (−)" onClick={() => speed(-1)}>−</button>
+              <span className="font-mono text-neutral-300">{autoSec}s</span>
+              <button type="button" className={ghost} title="Faster (+)" onClick={() => speed(1)}>+</button>
+              {divider}
+              <button type="button" className={cx(ghost, pinned && 'bg-white/10')} onClick={() => setPinned((p) => !p)}>📌 {pinned ? 'Unpin' : 'Pin'} controls (c)</button>
+              <button
+                type="button"
+                className={cx(chip, 'text-red-300 hover:bg-red-950')}
+                disabled={busy || run?.status === 'running'}
+                title="Take this run off the projector and return to the title screen. The run stays in the run list."
+                onClick={() => { setMenuOpen(false); void clearProjector(); }}
+              >
+                ⏏ Clear screen
+              </button>
+            </div>
+          )}
+
+          {/* the dock */}
+          <div
+            className={cx('flex max-w-[96vw] items-center gap-[0.25vw] rounded-2xl border border-white/10 bg-neutral-950/85 px-[0.6vw] py-[0.6vh] shadow-2xl backdrop-blur', dockShown && 'pointer-events-auto')}
+            onMouseEnter={() => setShowControls(true)}
+          >
+            <button type="button" className={ghost} disabled={busy} title="Hide the latest step (←)" aria-label="Hide latest step" onClick={() => void reveal({ action: 'prev' })}>◀</button>
+            <button type="button" className={ghost} disabled={busy} title="Reveal the next step (→)" aria-label="Reveal next step" onClick={() => void reveal({ action: 'next' })}>▶</button>
+            <button type="button" className={ghost} disabled={busy} title="Reveal everything up to the final step" onClick={() => void reveal({ action: 'final' })}>Final</button>
+            <button type="button" className={cx(ghost, state.compare && 'bg-sky-950 text-sky-200')} disabled={busy} title="Show the start and the final step side by side" onClick={() => void reveal({ action: 'compare', on: !state.compare })}>⇆ Compare</button>
+            {divider}
+            {run ? (
+              <>
+                {primary && (
+                  <button type="button" className={cx(chip, 'bg-sky-600 font-medium text-white hover:bg-sky-500')} disabled={busy || !allowed(primary.a)} onClick={() => void act(primary.a)}>{primary.label}</button>
+                )}
+                {allowed('next') && <button type="button" className={ghost} disabled={busy} title="Run exactly one step, then pause" onClick={() => void act('next')}>Next step</button>}
+                {allowed('stop') && <button type="button" className={cx(chip, 'text-red-300 hover:bg-red-950')} disabled={busy} onClick={() => void act('stop')}>■ Stop</button>}
+                <span className="ml-[0.4vw] flex items-center gap-[0.6vw] whitespace-nowrap text-neutral-400">
+                  <span className={cx(run.status === 'failed' ? 'text-red-400' : run.status === 'running' ? 'text-sky-300' : 'text-neutral-300')}>{run.status}</span>
+                  <span className="font-mono">{Math.min(run.currentStepIndex + (run.status === 'running' ? 1 : 0), run.steps.length)}/{run.steps.length}</span>
+                  {run.startedAt && <span className="font-mono">{fmtDuration((run.finishedAt ?? Date.now() - offset) - run.startedAt)}</span>}
+                  <span className="font-mono" title={run.costUnknownCount > 0 ? `${run.costUnknownCount} step(s) of unknown cost not included` : undefined}>
+                    {fmtMoney(run.costActualUsd + run.costEstimatedUsd)}{run.costUnknownCount > 0 ? '+' : ''}
+                  </span>
+                </span>
+              </>
+            ) : (
+              <span className="px-[0.5vw] text-neutral-500">no run selected</span>
+            )}
+            {divider}
+            <button
+              type="button"
+              className={cx(ghost, panelShown && 'bg-sky-950 text-sky-200')}
+              disabled={!onScreen}
+              title={onScreen ? `Choose what happens next to this ${onScreen.kind} (branches off if it is not the latest step)` : 'Show a step to branch from it'}
+              onClick={() => (panelShown ? closePanel() : (setAdvOpen(true), setAdvClosed(false)))}
+            >
+              ✨ What next?
+            </button>
+            <button
+              type="button"
+              className={ghost}
+              aria-label={muted ? 'Unmute sound' : 'Mute sound'}
+              title={muted ? 'Sound is off: click to turn the waiting music and step jingles on' : 'Mute the waiting music and step jingles'}
+              onClick={() => setMuted((m) => { localStorage.setItem('tele.muted', m ? '0' : '1'); return !m; })}
+            >
+              {muted ? '🔇' : '🔊'}
+            </button>
+            <button type="button" className={cx(ghost, menuOpen && 'bg-white/10')} title="More" onClick={() => setMenuOpen((m) => !m)}>⋯</button>
+          </div>
+        </div>
+      )}
 
       {startChooser}
 
@@ -742,19 +838,20 @@ export default function Present({ token }: { token: string }) {
       {detail && detail.artifact && (
         <div
           className="absolute inset-x-0 top-0 z-20 flex flex-col bg-[#050505] px-[3vw] pt-[3vh] pb-[1vh]"
-          style={{ bottom: bottomH }} // measured: clears the step bar and any control rows
+          style={{ bottom: stripH }} // measured: clears the step strip
           onClick={stopAuto}
         >
-          <div className="mb-[1.5vh] flex items-baseline gap-[1.5vw]">
-            <span className="text-neutral-100" style={{ fontSize: 'clamp(14px, 1.6vw, 28px)' }}>
-              {detail.stage === 0 ? `Starting ${detail.kind}` : `Step ${detail.stage} — ${detail.label}`}
-            </span>
-            <span className="font-mono text-neutral-500" style={{ fontSize: 'clamp(10px, 1vw, 18px)' }}>
-              {detail.modelId ?? ''}
-            </span>
-            <span className="ml-auto text-neutral-500" style={{ fontSize: 'clamp(10px, 1vw, 18px)' }}>
-              {autoOn ? `autoplay ${slides.findIndex((x) => x.stage === detail.stage) + 1}/${slides.length} · ${autoSec}s · Space or Esc to stop` : '←/→ flip · Esc or click to return to the live stage'}
-            </span>
+          <div className="mb-[1.5vh] flex items-start gap-[1.5vw]">
+            <div className="min-w-0">
+              <div className="text-neutral-100" style={{ fontSize: 'clamp(14px, 1.6vw, 28px)' }}>
+                {detail.stage === 0 ? `Starting ${detail.kind}` : `Step ${detail.stage} — ${detail.label}`}
+              </div>
+              <div className="font-mono text-neutral-500" style={{ fontSize: 'clamp(10px, 1vw, 18px)' }}>{detail.modelId ?? ''}</div>
+              <div className="mt-[0.4vh] text-neutral-600" style={{ fontSize: 'clamp(9px, 0.85vw, 15px)' }}>
+                {autoOn ? `autoplay ${slides.findIndex((x) => x.stage === detail.stage) + 1}/${slides.length} · ${autoSec}s · Space or Esc to stop` : '←/→ flip · Esc or click to return to the live stage'}
+              </div>
+            </div>
+            <div className="ml-auto"><Meter stages={stages} shown={detail} /></div>
           </div>
           <div className="min-h-0 flex-1" onClick={(e) => e.stopPropagation()}>
             <StageArtifact key={detail.artifact.id} a={detail.artifact} token={token} autoPlay={autoOn} />

@@ -60,6 +60,11 @@ CREATE TABLE IF NOT EXISTS model_tests (
   model_id TEXT NOT NULL, step_type TEXT NOT NULL, state TEXT NOT NULL, note TEXT, elapsed_ms INTEGER, tested_at INTEGER NOT NULL,
   PRIMARY KEY (model_id, step_type)
 );
+-- the resemblance meter: a judge's score of each step's output against the run's original (display only)
+CREATE TABLE IF NOT EXISTS resemblance (
+  run_id TEXT NOT NULL, step_index INTEGER NOT NULL, status TEXT NOT NULL, score REAL, detail TEXT, model TEXT, cost_usd REAL, error TEXT, created_at INTEGER NOT NULL,
+  PRIMARY KEY (run_id, step_index)
+);
 `;
 
 export function openDb(file: string): DB {

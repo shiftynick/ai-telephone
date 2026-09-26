@@ -1,3 +1,4 @@
+import { HostWhatNext } from './HostWhatNext.tsx';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   PRESET_SCHEMA_VERSION,
@@ -363,6 +364,7 @@ export default function Host() {
           <RevealControls session={session} run={run} onChanged={() => void refreshAll()} onError={onError} />
         </div>
         <div className="space-y-3">
+          <HostWhatNext session={session} openRun={run} models={models} onChanged={() => void refreshAll()} onError={onError} />
           <PipelineEditor
             editor={editor}
             setEditor={(b) => {

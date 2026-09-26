@@ -1,14 +1,30 @@
 import { type DB, kvGet, kvSet, now } from './db.ts';
 import { FAL_ENDPOINTS } from './providers/fal.ts';
-import { KEYFRAME_MODELS, PIKAFRAMES, STEP_TYPES, keyframesCount, type ModelEntry, type ModelsView, type StepDefinition, type StepType } from '../shared/types.ts';
+import { LOCAL_MODELS, isOpenRouterClaude, KEYFRAME_MODELS, PIKAFRAMES, SPEECH_TONES, STEP_TYPES, keyframesCount, type ModelEntry, type ModelsView, type Provider, type StepDefinition, type StepType } from '../shared/types.ts';
 
 export const FAVORITES: Record<StepType, string[]> = {
-  image_to_text: ['google/gemini-3.8-flash', 'openai/gpt-4.1-mini', 'anthropic/claude-sonnet-4.6', 'google/gemini-2.5-flash'],
-  text_to_text: ['google/gemini-3.8-flash', 'openai/gpt-4.1-mini', 'anthropic/claude-sonnet-4.6'],
+  image_to_text: ['google/gemini-3.8-flash', 'openai/gpt-4.1-mini', 'claude-cli/sonnet', 'google/gemini-2.5-flash'],
+  text_to_text: ['google/gemini-3.8-flash', 'openai/gpt-4.1-mini', 'claude-cli/sonnet', 'local/qwen3.5-9b'],
   text_to_image: ['google/gemini-3.1-flash-lite-image', 'google/gemini-3.1-flash-image', 'openai/gpt-image-2.5-flare', 'bytedance-seed/seedream-4.5'],
   image_to_video: [FAL_ENDPOINTS.image_to_video, PIKAFRAMES],
   text_to_video: [FAL_ENDPOINTS.text_to_video],
+  text_to_svg: ['claude-cli/opus', 'claude-cli/sonnet'],
+  image_to_svg: ['claude-cli/opus', 'claude-cli/sonnet'],
+  text_to_ascii: ['claude-cli/opus', 'claude-cli/sonnet'],
+  text_to_code_image: ['claude-cli/opus', 'claude-cli/sonnet'],
+  text_to_code_video: ['claude-cli/opus', 'claude-cli/sonnet'],
+  text_to_audio: ['gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts'],
+  audio_to_text: ['gemini-3.8-flash'],
 };
+
+/** Any text model can write code; only vision models can trace an image. */
+const CODE_FROM_TEXT: StepType[] = ['text_to_svg', 'text_to_ascii', 'text_to_code_image', 'text_to_code_video'];
+const CLAUDE_CLI_MODELS: [string, string][] = [
+  ['claude-cli/opus', 'Claude Opus (claude CLI · subscription)'],
+  ['claude-cli/sonnet', 'Claude Sonnet (claude CLI · subscription)'],
+  ['claude-cli/haiku', 'Claude Haiku (claude CLI · subscription)'],
+];
+export const TTS_VOICES = ['Charon', 'Kore', 'Puck', 'Fenrir', 'Aoede', 'Leda', 'Orus', 'Zephyr', 'Enceladus', 'Algieba', 'Sadachbia', 'Gacrux'];
 
 type Catalog = { chat: any[]; image: any[]; imageParams: Record<string, { aspect_ratio?: string[]; resolution?: string[]; references?: number }> };
 const STALE_MS = 24 * 3600_000;
@@ -82,7 +98,7 @@ export class ModelCatalog {
     const tests = new Map<string, any>();
     for (const t of this.db.prepare('SELECT * FROM model_tests').all() as any[]) tests.set(`${t.model_id}|${t.step_type}`, t);
     const byId = new Map<string, ModelEntry>();
-    const add = (id: string, name: string, provider: 'openrouter' | 'fal', type: StepType, source: string, params?: ModelEntry['params']) => {
+    const add = (id: string, name: string, provider: Provider, type: StepType, source: string, params?: ModelEntry['params']) => {
       let e = byId.get(id);
       if (!e) {
         e = { id, name, provider, stepTypes: [], favorite: false, hiddenByDefault: /:free$|:batch$|^openrouter\/|-batch\b/.test(id), source, params, testState: 'catalog-only' };
@@ -102,9 +118,13 @@ export class ModelCatalog {
       for (const m of c.value.chat) {
         const i: string[] = m.architecture?.input_modalities ?? [];
         const o: string[] = m.architecture?.output_modalities ?? [];
-        if (!o.includes('text') || imageIds.has(m.id)) continue;
+        // Claude only ever runs through the local CLI (subscription), never billed per token via OpenRouter.
+        if (!o.includes('text') || imageIds.has(m.id) || isOpenRouterClaude(m.id)) continue;
         if (i.includes('image')) add(m.id, m.name, 'openrouter', 'image_to_text', 'OpenRouter Models API');
         if (i.includes('text')) add(m.id, m.name, 'openrouter', 'text_to_text', 'OpenRouter Models API');
+        // code steps: the model writes the code, the app renders it
+        if (i.includes('image')) add(m.id, m.name, 'openrouter', 'image_to_svg', 'OpenRouter Models API');
+        if (i.includes('text')) for (const t of CODE_FROM_TEXT) add(m.id, m.name, 'openrouter', t, 'OpenRouter Models API');
       }
       for (const m of c.value.image) add(m.id, m.name, 'openrouter', 'text_to_image', 'OpenRouter Image Models API', c.value.imageParams[m.id]);
     }
@@ -112,6 +132,16 @@ export class ModelCatalog {
     add(FAL_ENDPOINTS.image_to_video, 'MiniMax H3 Max Turbo (image → video)', 'fal', 'image_to_video', 'fal endpoint schema (built-in adapter)', falParams);
     add(PIKAFRAMES, 'Pika 2.2 Pikaframes (2–5 keyframes → video)', 'fal', 'image_to_video', 'fal endpoint schema (built-in adapter)', { resolution: ['720p', '1080p'] });
     add(FAL_ENDPOINTS.text_to_video, 'MiniMax H3 Max Turbo (text → video)', 'fal', 'text_to_video', 'fal endpoint schema (built-in adapter)', falParams);
+    for (const [id, name] of CLAUDE_CLI_MODELS)
+      for (const t of ['image_to_text', 'text_to_text', 'image_to_svg', ...CODE_FROM_TEXT] as StepType[]) add(id, name, 'claude', t, 'local claude CLI (built-in adapter)');
+    // text → text only: the local gateway silently drops images
+    for (const [id, m] of Object.entries(LOCAL_MODELS)) add(id, m.name, 'local', 'text_to_text', 'this laptop (Omarchy Local AI, built-in adapter)');
+    const voices = { voice: TTS_VOICES };
+    add('gemini-3.8-flash-tts', 'Gemini 3.8 Flash TTS', 'gemini', 'text_to_audio', 'Gemini API (built-in adapter)', voices);
+    add('gemini-3.8-flash-lite-tts', 'Gemini 3.8 Flash-Lite TTS', 'gemini', 'text_to_audio', 'Gemini API (built-in adapter)', voices);
+    add('gemini-2.5-flash-preview-tts', 'Gemini 2.5 Flash TTS (preview)', 'gemini', 'text_to_audio', 'Gemini API (built-in adapter)', voices);
+    add('gemini-3.8-flash', 'Gemini 3.8 Flash (listens)', 'gemini', 'audio_to_text', 'Gemini API (built-in adapter)');
+    add('gemini-2.5-flash', 'Gemini 2.5 Flash (listens)', 'gemini', 'audio_to_text', 'Gemini API (built-in adapter)');
     const models = [...byId.values()].sort((a, b) => Number(b.favorite) - Number(a.favorite) || a.id.localeCompare(b.id));
     return { refreshedAt: c?.updatedAt ?? null, stale: !c || now() - c.updatedAt > STALE_MS || !!this.lastError, error: this.lastError, models };
   }
@@ -122,11 +152,17 @@ export class ModelCatalog {
     const m = v.models.find((x) => x.id === def.modelId);
     const t = STEP_TYPES[def.type];
     if (def.params?.reference && def.type !== 'text_to_image') return 'A reference image only applies to text → image steps.';
+    if (def.params?.voice !== undefined && def.type !== 'text_to_audio') return 'A voice only applies to text → speech steps.';
+    if (def.type === 'text_to_audio' && def.instruction.trim() && !(SPEECH_TONES as readonly string[]).includes(def.instruction.trim()))
+      return `A speech step's instruction is its tone: one of ${SPEECH_TONES.join(', ')}, or empty. Longer directions get read aloud by the voice model.`;
+    if (isOpenRouterClaude(def.modelId)) return `"${def.modelId}" would bill per token through OpenRouter; Claude runs through the local claude CLI instead: use claude-cli/opus, claude-cli/sonnet, or claude-cli/haiku.`;
     if (!m) {
-      if (!v.refreshedAt && t.provider === 'openrouter') return null; // no catalog at all (offline first boot): cannot judge
-      return `Model "${def.modelId}" is not in the ${t.provider === 'fal' ? 'supported fal endpoint list (a new endpoint needs an adapter)' : 'OpenRouter catalog'}.`;
+      const viaOpenRouter = t.provider === 'openrouter' || (t.provider === 'code' && !def.modelId.startsWith('claude-cli/'));
+      if (!v.refreshedAt && viaOpenRouter) return null; // no catalog at all (offline first boot): cannot judge
+      return `Model "${def.modelId}" is not in the ${t.provider === 'fal' ? 'supported fal endpoint list (a new endpoint needs an adapter)' : viaOpenRouter ? 'OpenRouter catalog' : `built-in ${t.provider} model list`}.`;
     }
     if (!m.stepTypes.includes(def.type)) return `Model "${def.modelId}" does not support ${t.label} according to the catalog.`;
+    if (def.params?.voice !== undefined && !m.params?.voice?.includes(def.params.voice)) return `Voice "${def.params.voice}" is not one of ${m.params?.voice?.join(', ') ?? 'the known voices'}.`;
     for (const key of ['aspect_ratio', 'resolution'] as const) {
       const val = def.params?.[key];
       if (val === undefined) continue;

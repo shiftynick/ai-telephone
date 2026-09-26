@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
-import { api, mediaUrl, type LanView, type SessionView, type SourceCandidate } from './api.ts';
+import { api, mediaUrl, type LanView, type PublicView, type SessionView, type SourceCandidate } from './api.ts';
 import { Banner, CopyText, Pill, Section, cx, fmtTime } from './util.tsx';
 
 function Qr({ value }: { value: string }) {
@@ -41,6 +41,13 @@ export function SourcePanel({
   const [sources, setSources] = useState<SourceCandidate[] | null>(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const [pub, setPub] = useState<PublicView | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api.publicLink().then((p) => alive && setPub(p), () => {});
+    return () => { alive = false; };
+  }, []);
+  const togglePublic = (on: boolean) => guard(async () => setPub(await api.setPublic(on)));
 
   // Any earlier upload or run artifact can start the next run, not just the newest accepted one.
   useEffect(() => {
@@ -70,11 +77,33 @@ export function SourcePanel({
     }
   };
 
-  const joinUrl =
-    lan?.active && session ? `http://${lan.active.address}:${lan.active.port}/join/${session.uploadToken}` : null;
+  // the public link wins when it is on: phones then need no venue Wi-Fi at all
+  const joinUrl = !session ? null
+    : pub?.active ? `${pub.active.url}/join/${session.uploadToken}`
+    : lan?.active ? `http://${lan.active.address}:${lan.active.port}/join/${session.uploadToken}` : null;
 
   return (
     <Section title="Source">
+      {/* --- public link (internet) ---------------------------------------- */}
+      {pub?.available && (
+        <div className="mb-4 space-y-2">
+          <div className="lbl">Phone upload over the internet (no Wi-Fi needed)</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" className="btn btn-primary" disabled={busy || !!pub.active} onClick={() => togglePublic(true)}>
+              Start public link
+            </button>
+            <button type="button" className="btn" disabled={busy || !pub.active} onClick={() => togglePublic(false)}>
+              Stop public link
+            </button>
+            {pub.active ? <Pill tone="ok">public at {pub.active.url}</Pill> : <Pill>off</Pill>}
+          </div>
+          <p className="text-[11px] text-neutral-500">
+            Published through Tailscale Funnel over HTTPS. It only serves the phone upload page: no host controls, no projector, no media.
+            Uploads still wait for you to accept them. Stop it (and rotate the upload link) after the talk.
+          </p>
+        </div>
+      )}
+
       {/* --- LAN sharing ------------------------------------------------ */}
       <div className="space-y-2">
         <div className="lbl">Phone upload over local Wi-Fi</div>
@@ -122,7 +151,9 @@ export function SourcePanel({
           <div className="flex flex-wrap items-start gap-4">
             <Qr value={joinUrl} />
             <div className="min-w-64 flex-1 space-y-2">
-              <p className="text-xs text-neutral-400">Point the phone camera at this code, or type the URL:</p>
+              <p className="text-xs text-neutral-400">
+                Point the phone camera at this code, or type the URL{pub?.active ? ' (public link: works on mobile data, no Wi-Fi needed)' : ' (same Wi-Fi only)'}:
+              </p>
               <CopyText value={joinUrl} />
               <p className="text-[11px] text-neutral-500">
                 Rotating the upload link immediately invalidates the old QR code. Uploads never start a run or contact any provider.

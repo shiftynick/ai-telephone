@@ -14,10 +14,12 @@ function Artifact({ a, big }: { a: ArtifactView; big?: boolean }) {
     return (
       <video src={mediaUrl(a.id)} controls playsInline preload="metadata" className="max-h-56 w-full rounded bg-black" />
     );
+  if (a.kind === 'audio') return <audio src={mediaUrl(a.id)} controls preload="metadata" className="w-full" />;
   return <img src={mediaUrl(a.id)} alt="step output" className="max-h-56 rounded object-contain" />;
 }
 
-function Attempt({ a }: { a: AttemptView }) {
+/** `code`: the step wrote code (SVG/ASCII/HTML) that was rendered; its source is kept in expandedPrompt. */
+function Attempt({ a, code }: { a: AttemptView; code?: boolean }) {
   return (
     <div className="rounded border border-neutral-800 bg-neutral-950/60 p-1.5 text-[11px] text-neutral-400">
       <div className="flex flex-wrap items-center gap-1">
@@ -37,8 +39,8 @@ function Attempt({ a }: { a: AttemptView }) {
       )}
       {a.expandedPrompt && (
         <details className="mt-1">
-          <summary className="cursor-pointer text-neutral-400">provider-expanded prompt</summary>
-          <div className="mt-1 rounded bg-neutral-900 p-1 text-neutral-300">{a.expandedPrompt}</div>
+          <summary className="cursor-pointer text-neutral-400">{code ? 'generated code' : 'provider-expanded prompt'}</summary>
+          <div className={cx('mt-1 rounded bg-neutral-900 p-1 text-neutral-300', code && 'max-h-64 overflow-auto whitespace-pre font-mono text-[10px]')}>{a.expandedPrompt}</div>
         </details>
       )}
       {a.error && (
@@ -48,6 +50,21 @@ function Attempt({ a }: { a: AttemptView }) {
         </div>
       )}
     </div>
+  );
+}
+
+/** The resemblance meter's verdict for a step: % of the original that survives, and what was lost. */
+function Resemblance({ r }: { r?: StepView['resemblance'] }) {
+  if (!r) return null;
+  if (r.status === 'scoring') return <span className="animate-pulse text-[11px] text-neutral-500">judging resemblance…</span>;
+  if (r.status === 'failed') return <span className="text-[11px] text-neutral-600" title={r.error}>resemblance: no score</span>;
+  if (r.score == null) return null;
+  const hue = Math.round(8 + r.score * 1.8);
+  return (
+    <span className="flex items-center gap-1 text-[11px]" title={r.aspects ? Object.entries(r.aspects).map(([k, n]) => `${k} ${n}`).join(' · ') : 'speech keeps what its text kept'}>
+      <span className="rounded px-1.5 font-semibold tabular-nums" style={{ color: `hsl(${hue},85%,62%)`, background: `hsl(${hue},60%,12%)` }}>{r.score}%</span>
+      {r.lost && !/^nothing/i.test(r.lost) && r.status !== 'carried' && <span className="text-neutral-500 italic">lost: {r.lost}</span>}
+    </span>
   );
 }
 
@@ -63,6 +80,7 @@ function StepRow({ step, now, onNewRun, busy }: { step: StepView; now: number; o
         <span className="font-mono text-[11px] text-neutral-500">{step.definition.modelId}</span>
         {step.definition.auto && <Pill tone="accent">auto-added bridge</Pill>}
         {elapsed != null && <span className="text-neutral-400">{fmtDuration(elapsed)}</span>}
+        <Resemblance r={step.resemblance} />
         {step.artifact && (
           <button type="button" className="btn btn-xs ml-auto" disabled={busy} onClick={() => onNewRun(step.artifact!.id)}>
             New run from this artifact
@@ -89,7 +107,7 @@ function StepRow({ step, now, onNewRun, busy }: { step: StepView; now: number; o
           </summary>
           <div className="mt-1 space-y-1">
             {step.attempts.map((a) => (
-              <Attempt key={a.id} a={a} />
+              <Attempt key={a.id} a={a} code={STEP_TYPES[step.definition.type]?.provider === 'code'} />
             ))}
           </div>
         </details>
@@ -326,6 +344,11 @@ export default function RunPanel({
             </div>
           </div>
 
+          {run.steps.some((s) => s.artifact && !s.resemblance) && (
+            <button type="button" className="btn btn-xs" disabled={busy} title="Score how much of the original survives at each step (a small judge-model call per step)" onClick={() => void api.scoreRun(run.id)}>
+              Score resemblance
+            </button>
+          )}
           <div className="space-y-2">
             {run.steps.map((s) => (
               <StepRow key={s.index} step={s} now={now} busy={busy} onNewRun={(id) => onCreateRun(id)} />

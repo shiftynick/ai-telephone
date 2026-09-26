@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { closeAll, get, makeApp, makeJpeg, post, quickChain, uploadDesktop } from './helpers.ts';
 import { MockAdapter } from '../server/providers/mock.ts';
-import { PRESET_SCHEMA_VERSION, type PresetBody } from '../shared/types.ts';
+import { WORD_GAMES, textForm, PRESET_SCHEMA_VERSION, type PresetBody } from '../shared/types.ts';
 
 afterEach(closeAll);
 
@@ -115,6 +115,34 @@ describe('interactive (adventure) runs', () => {
     await app.runner.idle();
     expect(mock.calls[0].instruction).toMatch(/^Create one image[\s\S]*Additional direction: as a watercolour$/);
     expect(mock.calls[0].input).toEqual({ kind: 'text', text: 'a quiet harbour' });
+  });
+
+  it('word games: the game IS the instruction (plus any twist), text → text only', async () => {
+    const { app, mock } = await mockApp();
+    await textSource(app, 'a quiet harbour');
+    const id = (await post(app, '/api/runs', { preset: empty('text'), interactive: true })).json().id;
+    const res = await post(app, `/api/runs/${id}/steps`, { type: 'text_to_text', game: 'emoji', instructionSet: 'storyteller', twist: 'only blue things' });
+    expect(res.statusCode, res.body).toBe(200);
+    await app.runner.idle();
+    expect(mock.calls[0].instruction).toBe(`${WORD_GAMES.emoji.instruction}\n\nAdditional direction: only blue things`);
+    expect(mock.calls[0].input).toEqual({ kind: 'text', text: 'a quiet harbour' });
+    expect((await post(app, `/api/runs/${id}/steps`, { type: 'text_to_image', game: 'haiku' })).statusCode).toBe(400);
+    expect((await post(app, `/api/runs/${id}/steps`, { type: 'text_to_text', game: 'limerick' })).statusCode).toBe(400);
+    expect([textForm('🪵☕🟥 🦆💙➡️🌵'), textForm('red mug at dawn\na blue duck sits on a book\ncactus keeps the watch'), textForm('A duck on a book.')]).toEqual(['emoji', 'haiku', null]);
+  });
+
+  it('speech: tone and voice go on the step; a twist is refused (it would be read aloud)', async () => {
+    const mock = new MockAdapter('/tmp', 0);
+    const { makeApp } = await import('./helpers.ts');
+    const app = await makeApp({ adapters: { openrouter: mock, fal: mock, gemini: mock } });
+    await textSource(app, 'a quiet harbour');
+    const id = (await post(app, '/api/runs', { preset: empty('text'), interactive: true })).json().id;
+    expect((await post(app, `/api/runs/${id}/steps`, { type: 'text_to_audio', twist: 'like a pirate' })).json().error).toMatch(/tone, not a twist/);
+    expect((await post(app, `/api/runs/${id}/steps`, { type: 'text_to_image', tone: 'excited' })).statusCode).toBe(400);
+    const res = await post(app, `/api/runs/${id}/steps`, { type: 'text_to_audio', tone: 'excited', voice: 'Kore' });
+    expect(res.statusCode, res.body).toBe(200);
+    await app.runner.idle();
+    expect(mock.calls[0]).toMatchObject({ type: 'text_to_audio', instruction: 'excited', params: { voice: 'Kore' } });
   });
 
   it('never lets steps be appended to a preset run, and needs the host', async () => {

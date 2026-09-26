@@ -61,14 +61,21 @@ export function Banner({ kind = 'info', children }: { kind?: 'info' | 'warn' | '
   return <div className={cx('rounded-md border px-3 py-2 text-sm', tone)}>{children}</div>;
 }
 
-export function Section({ title, right, children }: { title: string; right?: React.ReactNode; children: React.ReactNode }) {
+/** A host-console panel. Click the title to collapse it; the choice is remembered per panel in this browser. */
+export function Section({ title, right, children, defaultOpen = true }: { title: string; right?: React.ReactNode; children: React.ReactNode; defaultOpen?: boolean }) {
+  const key = `tele.section.${title}`;
+  const [open, setOpen] = useState(() => { const v = localStorage.getItem(key); return v === null ? defaultOpen : v === '1'; });
+  const toggle = () => setOpen((o) => { localStorage.setItem(key, o ? '0' : '1'); return !o; });
   return (
     <section className="rounded-lg border border-neutral-800 bg-neutral-950/70">
-      <header className="flex items-center justify-between gap-2 border-b border-neutral-800 px-3 py-2">
-        <h2 className="text-sm font-semibold tracking-wide text-neutral-200 uppercase">{title}</h2>
-        <div className="flex items-center gap-2">{right}</div>
+      <header className={cx('flex items-center justify-between gap-2 px-3 py-2', open && 'border-b border-neutral-800')}>
+        <button type="button" onClick={toggle} aria-expanded={open} className="flex items-center gap-2 text-left" title={open ? 'Collapse' : 'Expand'}>
+          <span className={cx('inline-block text-[10px] text-neutral-500 transition-transform', open ? 'rotate-90' : '')}>▶</span>
+          <h2 className="text-sm font-semibold tracking-wide text-neutral-200 uppercase">{title}</h2>
+        </button>
+        {open && <div className="flex items-center gap-2">{right}</div>}
       </header>
-      <div className="space-y-3 p-3">{children}</div>
+      {open && <div className="space-y-3 p-3">{children}</div>}
     </section>
   );
 }

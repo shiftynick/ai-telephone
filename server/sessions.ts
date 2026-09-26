@@ -2,7 +2,7 @@ import { type DB, newId, newToken, now, sha256 } from './db.ts';
 import type { ArtifactStore } from './artifacts.ts';
 import type { Runner } from './runner.ts';
 import type { EventBus } from './events.ts';
-import { STEP_TYPES, type PresentStage, type PresentState } from '../shared/types.ts';
+import { STEP_TYPES, WORD_GAMES, WORD_GAME_IDS, type PresentStage, type PresentState } from '../shared/types.ts';
 
 const SESSION_TTL_MS = 12 * 3600_000;
 
@@ -86,7 +86,7 @@ export class Sessions {
               WHERE s.artifact_id = a.id ORDER BY r2.created_at LIMIT 1)
           ) AS label
         FROM artifacts a
-        WHERE a.kind != 'video'
+        WHERE a.kind IN ('image', 'text')
       ) WHERE label IS NOT NULL
       ORDER BY created_at DESC LIMIT ?`).all(limit) as any[];
     const current = this.current().source_artifact_id;
@@ -169,6 +169,12 @@ export class Sessions {
     } else this.bus.publish(null, 'present.changed');
   }
 
+  /** Typical seconds for a model on a step type, from the last successful live run (model_tests), if known. */
+  private typicalSec(modelId: string, type: string): number | undefined {
+    const r = this.db.prepare("SELECT elapsed_ms FROM model_tests WHERE model_id = ? AND step_type = ? AND state = 'tested-successfully' AND elapsed_ms IS NOT NULL").get(modelId, type) as any;
+    return r ? Math.max(1, Math.round(r.elapsed_ms / 1000)) : undefined;
+  }
+
   /** Projector payload. Unrevealed stages carry NO artifact id, text, or instruction. */
   presentState(s: SessionRow): PresentState {
     const base = { replay: !!s.replay, currentStage: s.current_stage, compare: !!s.compare, serverTime: now() };
@@ -176,14 +182,17 @@ export class Sessions {
     const run = this.runner.view(s.selected_run_id);
     const revealed = new Set<number>(JSON.parse(s.revealed));
     const stages: PresentStage[] = [
-      { stage: 0, label: 'Starting ' + run.source.kind, kind: run.source.kind, status: 'done', revealed: revealed.has(0), artifact: revealed.has(0) ? run.source : undefined },
+      { stage: 0, label: 'Starting ' + run.source.kind, kind: run.source.kind, status: 'done', revealed: revealed.has(0), artifact: revealed.has(0) ? run.source : undefined, resemblance: revealed.has(0) ? { status: 'done', score: 100 } : undefined },
       ...run.steps.map((st): PresentStage => {
         const isRevealed = revealed.has(st.index + 1) && !!st.artifact;
         return {
-          stage: st.index + 1, label: STEP_TYPES[st.definition.type].label, kind: STEP_TYPES[st.definition.type].output, modelId: st.definition.modelId,
+          stage: st.index + 1, label: STEP_TYPES[st.definition.type].label, kind: STEP_TYPES[st.definition.type].output, modelId: st.definition.modelId, type: st.definition.type,
+          game: st.definition.type === 'text_to_text' ? WORD_GAME_IDS.find((g) => st.definition.instruction.startsWith(WORD_GAMES[g].instruction)) : undefined,
+          etaSec: st.status === 'running' ? this.typicalSec(st.definition.modelId, st.definition.type) : undefined,
           status: st.status === 'succeeded' ? 'done' : st.status === 'running' ? 'running' : st.status === 'pending' ? 'pending' : 'failed',
           startedAt: st.status === 'running' ? st.startedAt : undefined, revealed: isRevealed,
           artifact: isRevealed ? st.artifact : undefined, instruction: isRevealed ? st.definition.instruction : undefined,
+          resemblance: isRevealed ? st.resemblance : undefined,
         };
       }),
     ];

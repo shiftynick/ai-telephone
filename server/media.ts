@@ -134,6 +134,23 @@ export async function probeVideo(bytes: Buffer, tmpDir: string) {
   }
 }
 
+/** Generated speech: verify ffprobe can read an audio stream and get its length. */
+export async function probeAudio(bytes: Buffer, tmpDir: string) {
+  const f = path.join(tmpDir, `probe_${crypto.randomBytes(6).toString('hex')}.mp3`);
+  fs.writeFileSync(f, bytes);
+  try {
+    const { stdout } = await run('ffprobe', ['-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=codec_name:format=duration', '-of', 'json', f], { timeout: 30_000 });
+    const j = JSON.parse(stdout);
+    const durationSec = Number(j.format?.duration);
+    if (!j.streams?.[0] || !(durationSec > 0)) throw new Error('no audio stream');
+    return { durationSec, mime: 'audio/mpeg' };
+  } catch {
+    throw new MediaError('corrupt_media', 'Generated audio is not playable (ffprobe could not read it).');
+  } finally {
+    fs.rmSync(f, { force: true });
+  }
+}
+
 function isPrivateIp(ip: string): boolean {
   if (net.isIPv4(ip)) {
     const [a, b] = ip.split('.').map(Number);

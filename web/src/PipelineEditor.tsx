@@ -5,6 +5,8 @@ import {
   PIKAFRAMES,
   expandRepeats,
   INSTRUCTION_SETS,
+  setInstruction,
+  SPEECH_TONES,
   PRESET_SCHEMA_VERSION,
   STEP_TYPES,
   bridgeType,
@@ -30,6 +32,7 @@ export function defaultParams(type: StepType, models: ModelsView | null, modelId
     return m?.params?.aspect_ratio?.includes('16:9') ? { aspect_ratio: '16:9' } : {};
   }
   if (type === 'image_to_video' || type === 'text_to_video') return { resolution: '768P', duration: 5, prompt_expansion_mode: 'balanced' };
+  if (type === 'text_to_audio') return { voice: 'Charon' };
   return {};
 }
 
@@ -48,6 +51,7 @@ export function kindAfter(startingKind: ArtifactKind, steps: StepDefinition[], c
 export function nextStepType(kind: ArtifactKind): StepType {
   if (kind === 'image') return 'image_to_text';
   if (kind === 'text') return 'text_to_image';
+  if (kind === 'audio') return 'audio_to_text';
   return 'image_to_text'; // video has no built-in consumer step type yet
 }
 
@@ -111,6 +115,22 @@ function ParamControls({
             </select>
           </div>
         )}
+      </div>
+    );
+  }
+
+  if (step.type === 'text_to_audio') {
+    const voices = entry?.params?.voice ?? [];
+    return (
+      <div>
+        <label className="lbl">Voice</label>
+        <select className="inp mt-1" value={step.params.voice ?? ''} onChange={(e) => set({ voice: e.target.value || undefined })}>
+          <option value="">(default: Charon)</option>
+          {voices.map((v) => (
+            <option key={v} value={v}>{v}</option>
+          ))}
+        </select>
+        <p className="mt-1 text-[11px] text-neutral-500">Pick the delivery with the tone on the right. Only the text itself is spoken.</p>
       </div>
     );
   }
@@ -330,12 +350,19 @@ function StepCard({
               Reset to default
             </button>
           </div>
+          {step.type === 'text_to_audio' ? (
+            <select className="inp mt-1" value={step.instruction} onChange={(e) => update({ instruction: e.target.value })}>
+              <option value="">plain reading</option>
+              {SPEECH_TONES.map((t) => <option key={t} value={t}>[{t}]</option>)}
+            </select>
+          ) : (
           <textarea
             className="inp mt-1 h-28 resize-y font-mono text-xs leading-relaxed"
             value={step.instruction}
             onChange={(e) => update({ instruction: e.target.value })}
             placeholder={step.type === 'text_to_video' ? 'Optional: the preceding text is the prompt.' : ''}
           />
+          )}
         </div>
       </div>
     </div>
@@ -485,7 +512,7 @@ export default function PipelineEditor({
             const set = INSTRUCTION_SETS.find((x) => x.id === e.target.value);
             if (!set) return;
             if (window.confirm(`Replace the instruction on all ${editor.steps.length} step cards with the "${set.name}" set?`))
-              setSteps(editor.steps.map((st) => ({ ...st, instruction: set.instructions[st.type] })));
+              setSteps(editor.steps.map((st) => ({ ...st, instruction: setInstruction(set, st.type) })));
           }}
         >
           <option value="">Fill cards from instruction set…</option>

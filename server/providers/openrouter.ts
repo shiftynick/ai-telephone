@@ -1,4 +1,5 @@
 import { sha256 } from '../db.ts';
+import { isOpenRouterClaude } from '../../shared/types.ts';
 import { ProviderError, scrub, type StepAdapter, type StepRequest, type StepResult } from './types.ts';
 
 const BASE = 'https://openrouter.ai/api/v1';
@@ -17,6 +18,8 @@ export class OpenRouterAdapter implements StepAdapter {
   }
 
   async execute(req: StepRequest): Promise<StepResult> {
+    // Last line of defence: Claude must run through the claude CLI on the subscription, not per token here.
+    if (isOpenRouterClaude(req.modelId)) throw new ProviderError('bad_request', `Refusing to bill ${req.modelId} through OpenRouter: use claude-cli/opus, claude-cli/sonnet, or claude-cli/haiku.`);
     if (req.type === 'text_to_image') return this.generateImage(req);
     if (req.type === 'image_to_text' || req.type === 'text_to_text') return this.chat(req);
     throw new ProviderError('unsupported', `OpenRouter adapter cannot run ${req.type}`);
@@ -94,7 +97,12 @@ export class OpenRouterAdapter implements StepAdapter {
       providerName: json?.provider,
       providerRequestId: json?.id,
     };
-    if (choice?.error) throw new ProviderError('server_error', scrub(`Provider error: ${choice.error?.message ?? 'unknown'}`, [this.opts.apiKey]), { providerRequestId: json?.id });
+    if (choice?.error) {
+      // e.g. "temporarily rate-limited upstream": transient, so let the runner's backoff retry it
+      const m = String(choice.error?.message ?? 'unknown');
+      const transient = /rate.?limit|overload|temporar|try again|retry/i.test(m) || [429, 502, 503].includes(Number(choice.error?.code));
+      throw new ProviderError(transient ? 'rate_limited' : 'server_error', scrub(`Provider error: ${m}`, [this.opts.apiKey]), { providerRequestId: json?.id, retryable: transient, retryAfterMs: transient ? 8000 : undefined });
+    }
     if (msg?.refusal) throw new ProviderError('refusal', `Model refused: ${String(msg.refusal).slice(0, 300)}`, { providerRequestId: json?.id });
     if (choice?.finish_reason === 'content_filter' || choice?.native_finish_reason === 'SAFETY')
       throw new ProviderError('safety', 'The provider blocked this content (content filter).', { providerRequestId: json?.id });

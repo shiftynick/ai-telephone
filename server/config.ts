@@ -9,6 +9,7 @@ export type Config = {
   dbPath: string;
   openrouterKey: string;
   falKey: string;
+  geminiKey: string;
   mock: boolean;
   devWebPort: number | null;
   defaultBudgetUsd: number | null;
@@ -40,6 +41,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     dbPath: path.join(dataDir, 'telephone.sqlite'),
     openrouterKey: process.env.OPENROUTER_API_KEY ?? '',
     falKey: process.env.FAL_KEY ?? '',
+    geminiKey: process.env.GEMINI_API_KEY ?? '',
     mock: process.env.MOCK_PROVIDERS === '1',
     devWebPort: process.env.DEV_WEB_PORT ? Number(process.env.DEV_WEB_PORT) : null,
     defaultBudgetUsd: budget === undefined ? 2 : budget === '' ? null : Number(budget),

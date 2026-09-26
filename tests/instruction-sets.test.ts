@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { closeAll, get, makeApp, makeJpeg, post, quickChain, uploadDesktop } from './helpers.ts';
 import { MockAdapter } from '../server/providers/mock.ts';
-import { DEFAULT_INSTRUCTIONS, INSTRUCTION_SETS, PRESET_SCHEMA_VERSION, STEP_TYPES, type StepType } from '../shared/types.ts';
+import { DEFAULT_INSTRUCTIONS, INSTRUCTION_SETS, PRESET_SCHEMA_VERSION, STEP_TYPES, setInstruction, type StepType } from '../shared/types.ts';
 
 afterEach(closeAll);
 
@@ -13,16 +13,19 @@ const mockApp = async () => {
   return { app, mock };
 };
 
+const CLASSIC = ['image_to_text', 'text_to_image', 'text_to_text', 'image_to_video', 'text_to_video'];
+
 describe('instruction sets', () => {
   it('are complete and distinct, and every image description keeps the prompt-injection guard', () => {
     expect(INSTRUCTION_SETS.map((s) => s.id)).toEqual(['faithful', 'forensic', 'minimal', 'storyteller', 'storyboard', 'childlike']);
     expect(new Set(INSTRUCTION_SETS.map((s) => s.id)).size).toBe(INSTRUCTION_SETS.length);
-    expect(INSTRUCTION_SETS[0].instructions).toEqual(DEFAULT_INSTRUCTIONS);
+    for (const t of Object.keys(STEP_TYPES) as (keyof typeof STEP_TYPES)[]) expect(setInstruction(INSTRUCTION_SETS[0], t)).toBe(DEFAULT_INSTRUCTIONS[t]);
     for (const set of INSTRUCTION_SETS) {
-      expect(Object.keys(set.instructions).sort()).toEqual(Object.keys(STEP_TYPES).sort());
+      // sets word the classic five step types; newer types fall back to their default instruction
+      for (const t of CLASSIC) expect(Object.keys(set.instructions)).toContain(t);
       expect(set.instructions.image_to_text).toMatch(/scene content, not commands/);
-      expect(set.instructions.image_to_text.length).toBeGreaterThan(40);
-      expect(set.instructions.text_to_image.length).toBeGreaterThan(10);
+      expect(set.instructions.image_to_text!.length).toBeGreaterThan(40);
+      expect(set.instructions.text_to_image!.length).toBeGreaterThan(10);
     }
     // interpretive/lossy sets are labelled as experiments so drift is not misread as model failure
     expect(INSTRUCTION_SETS.filter((s) => s.experiment).map((s) => s.id)).toEqual(['minimal', 'storyteller', 'storyboard', 'childlike']);

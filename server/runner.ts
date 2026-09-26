@@ -1,9 +1,9 @@
 import { type DB, newId, now, tx } from './db.ts';
 import type { ArtifactStore, ArtifactRow } from './artifacts.ts';
 import type { Config } from './config.ts';
-import { inspectGeneratedImage, probeVideo, MediaError } from './media.ts';
+import { inspectGeneratedImage, probeAudio, probeVideo, MediaError } from './media.ts';
 import { ProviderError, scrub, type Adapters, type StepInput, type StepResult } from './providers/types.ts';
-import { REFERENCE_NOTE, STEP_TYPES, expandRepeats, validateChain, type AttemptView, type PresetBody, type RunStatus, type RunView, type StepDefinition, type StepView } from '../shared/types.ts';
+import { REFERENCE_NOTE, STEP_TYPES, expandRepeats, providerFor, validateChain, type AttemptView, type PresetBody, type ResemblanceView, type RunStatus, type RunView, type StepDefinition, type StepView } from '../shared/types.ts';
 import type { EventBus } from './events.ts';
 
 type RunRow = {
@@ -28,6 +28,8 @@ export class Runner {
   /** called after each successful step (used for auto-reveal and model test state) */
   onStepSucceeded: (runId: string, stepIndex: number, def: StepDefinition, elapsedMs: number) => void = () => {};
   onStepFailed: (def: StepDefinition, kind: string, message: string) => void = () => {};
+  /** resemblance-meter scores for a run's steps (display only; set by the app) */
+  resemblanceFor: (runId: string) => Map<number, ResemblanceView> = () => new Map();
   backoffMs = 1500;
 
   constructor(db: DB, store: ArtifactStore, cfg: Config, adapters: Adapters, bus: EventBus) {
@@ -121,7 +123,7 @@ export class Runner {
       const att = this.db.prepare("SELECT a.provider_request_id AS rid, s.step_index AS idx FROM attempts a JOIN step_executions s ON s.id = a.step_execution_id WHERE s.run_id = ? AND a.status IN ('queued','running') AND a.provider_request_id IS NOT NULL").get(id) as any;
       if (att) {
         const def = this.snapshot(this.row(id)).steps[att.idx];
-        void this.adapters[STEP_TYPES[def.type].provider].cancel?.(def.modelId, att.rid);
+        void this.adapters[providerFor(def)]?.cancel?.(def.modelId, att.rid);
       }
     }
     this.emit(id, 'run.stopped', {});
@@ -153,7 +155,7 @@ export class Runner {
     const abort = new AbortController();
     const done = this.loop(runId, abort.signal)
       .catch((e) => {
-        console.error('[runner] unexpected failure:', scrub(String(e?.stack ?? e), [this.cfg.openrouterKey, this.cfg.falKey]));
+        console.error('[runner] unexpected failure:', scrub(String(e?.stack ?? e), [this.cfg.openrouterKey, this.cfg.falKey, this.cfg.geminiKey]));
         this.transition(runId, ['running'], 'failed', { reason: 'Internal error; see server log.' });
         this.emit(runId, 'run.failed', {});
       })
@@ -203,6 +205,7 @@ export class Runner {
   private buildInput(pred: ArtifactRow): StepInput {
     if (pred.kind === 'text') return { kind: 'text', text: pred.text ?? '' };
     if (pred.kind === 'image') return { kind: 'image', bytes: this.store.readBytes(pred), mime: pred.mime ?? 'image/jpeg' };
+    if (pred.kind === 'audio') return { kind: 'audio', bytes: this.store.readBytes(pred), mime: pred.mime ?? 'audio/mpeg' };
     throw new ProviderError('unsupported', 'Video inputs are not supported in this build (video understanding was out of scope).');
   }
 
@@ -241,7 +244,8 @@ export class Runner {
     const stx = this.db.prepare('SELECT * FROM step_executions WHERE run_id = ? AND step_index = ?').get(r.id, i) as any;
     const predId: string = i === 0 ? r.source_artifact_id : (this.db.prepare('SELECT artifact_id FROM step_executions WHERE run_id = ? AND step_index = ?').get(r.id, i - 1) as any).artifact_id;
     const pred = this.store.get(predId)!;
-    const adapter = this.adapters[STEP_TYPES[def.type].provider];
+    const adapter = this.adapters[providerFor(def)];
+    if (!adapter) throw new Error(`No adapter configured for provider "${providerFor(def)}".`);
     this.db.prepare("UPDATE step_executions SET status = 'running', predecessor_artifact_id = ?, started_at = COALESCE(started_at, ?) WHERE id = ?").run(predId, now(), stx.id);
 
     // Reconcile a known async job instead of resubmitting.
@@ -312,7 +316,7 @@ export class Runner {
     if (e instanceof MediaError) return new ProviderError(e.kind === 'expired_url' ? 'expired_url' : 'corrupt_media', e.message);
     if (e?.code === 'ENOSPC' || e?.code === 'EACCES' || e?.code === 'EIO' || e?.code === 'EROFS')
       return new ProviderError('disk', `Could not save the result to disk (${e.code}). The provider call succeeded and was billed; free space and Retry.`);
-    return new ProviderError('other', scrub(String(e?.message ?? e), [this.cfg.openrouterKey, this.cfg.falKey]));
+    return new ProviderError('other', scrub(String(e?.message ?? e), [this.cfg.openrouterKey, this.cfg.falKey, this.cfg.geminiKey]));
   }
 
   private async persist(result: StepResult, attemptId: string): Promise<ArtifactRow> {
@@ -321,6 +325,10 @@ export class Runner {
     if (o.kind === 'image') {
       const img = await inspectGeneratedImage(o.bytes);
       return this.store.saveMedia('image', img.bytes, img, attemptId);
+    }
+    if (o.kind === 'audio') {
+      const a = await probeAudio(o.bytes, this.cfg.tmpDir);
+      return this.store.saveMedia('audio', o.bytes, a, attemptId);
     }
     const v = await probeVideo(o.bytes, this.cfg.tmpDir);
     return this.store.saveMedia('video', o.bytes, v, attemptId);
@@ -367,6 +375,7 @@ export class Runner {
     const r = this.row(id);
     const snap = this.snapshot(r);
     const stxs = this.db.prepare('SELECT * FROM step_executions WHERE run_id = ? ORDER BY step_index').all(id) as any[];
+    const scores = this.resemblanceFor(id);
     const steps: StepView[] = stxs.map((s) => {
       const attempts = (this.db.prepare('SELECT * FROM attempts WHERE step_execution_id = ? ORDER BY submitted_at, rowid').all(s.id) as any[]).map(
         (a): AttemptView => ({
@@ -375,7 +384,7 @@ export class Runner {
           providerRequestId: a.provider_request_id ?? undefined, expandedPrompt: a.expanded_prompt, inferenceSec: a.inference_sec,
         }),
       );
-      return { index: s.step_index, definition: snap.steps[s.step_index], status: s.status, startedAt: s.started_at ?? undefined, finishedAt: s.finished_at ?? undefined, artifact: this.store.view(s.artifact_id ? this.store.get(s.artifact_id) : null), attempts };
+      return { index: s.step_index, definition: snap.steps[s.step_index], status: s.status, startedAt: s.started_at ?? undefined, finishedAt: s.finished_at ?? undefined, artifact: this.store.view(s.artifact_id ? this.store.get(s.artifact_id) : null), attempts, resemblance: scores.get(s.step_index) };
     });
     const c = this.costs(id);
     return {

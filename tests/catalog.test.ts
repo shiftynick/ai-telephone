@@ -55,7 +55,7 @@ describe('model catalog', () => {
     const byId = new Map(view.models.map((m) => [m.id, m]));
 
     expect(byId.get('google/gemini-3.8-flash')!.favorite).toBe(true);
-    expect(byId.get('google/gemini-3.8-flash')!.stepTypes.sort()).toEqual(['image_to_text', 'text_to_text']);
+    expect(byId.get('google/gemini-3.8-flash')!.stepTypes.sort()).toEqual(['image_to_svg', 'image_to_text', 'text_to_ascii', 'text_to_code_image', 'text_to_code_video', 'text_to_svg', 'text_to_text']) // describe + retell, and it can write code for the code-drawn steps;
     expect(byId.get('google/gemini-3.1-flash-lite-image')!.favorite).toBe(true);
     expect(byId.get('minimax/h3-max-turbo/image-to-video')!.favorite).toBe(true);
 

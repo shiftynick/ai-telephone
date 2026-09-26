@@ -24,6 +24,7 @@ const EXT: Record<string, string> = {
   'image/png': 'png',
   'image/webp': 'webp',
   'video/mp4': 'mp4',
+  'audio/mpeg': 'mp3',
 };
 
 export class ArtifactStore {
@@ -63,7 +64,7 @@ export class ArtifactStore {
 
   /** temp write → fsync → atomic rename → commit DB row. The row only exists once the file is durable. */
   saveMedia(
-    kind: 'image' | 'video',
+    kind: 'image' | 'video' | 'audio',
     bytes: Buffer,
     meta: { mime: string; width?: number; height?: number; durationSec?: number },
     producingAttemptId: string | null,

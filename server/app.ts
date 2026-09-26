@@ -17,8 +17,14 @@ import { MediaError, normalizeImage } from './media.ts';
 import { OpenRouterAdapter } from './providers/openrouter.ts';
 import { FalAdapter } from './providers/fal.ts';
 import { MockAdapter } from './providers/mock.ts';
+import { ClaudeCliAdapter } from './providers/claude.ts';
+import { CodeArtAdapter } from './providers/code.ts';
+import { GeminiAdapter } from './providers/gemini.ts';
+import { LocalAdapter } from './providers/local.ts';
+import { HtmlRenderer } from './render.ts';
+import { ResemblanceJudge, type JudgeOpts } from './resemblance.ts';
 import type { Adapters } from './providers/types.ts';
-import { MAX_KEYFRAMES, PIKAFRAMES, PresetBody, STEP_TYPES, StepDefinition, StepType, bridgeType, instructionSet, keyframesCount, validateChain, type StepIssue } from '../shared/types.ts';
+import { MAX_KEYFRAMES, PIKAFRAMES, PresetBody, STEP_TYPES, StepDefinition, StepType, bridgeType, instructionSet, setInstruction, WORD_GAMES, WORD_GAME_IDS, SPEECH_TONES, keyframesCount, validateChain, type StepIssue } from '../shared/types.ts';
 
 const HOST_COOKIE = 'tele_host';
 const HOST_SESSION_MS = 12 * 3600_000;
@@ -29,14 +35,35 @@ export type LanControl = {
   set(address: string | null): Promise<void>;
 };
 
+/**
+ * Public phone link: a second listener (127.0.0.1 only) published to the internet through Tailscale Funnel,
+ * so phones need no venue Wi-Fi. Requests on it are flagged isPublic (and isLan): no host powers, and only the
+ * phone routes are reachable (see PUBLIC_ROUTES).
+ */
+export type PublicControl = {
+  active(): { url: string; host: string; port: number } | null;
+  set(on: boolean): Promise<void>;
+};
+
+/** Everything the phone page needs, and nothing else, is reachable through the public link. */
+export const PUBLIC_ROUTES: [method: string, path: RegExp][] = [
+  ['GET', /^\/join\/[A-Za-z0-9_-]{8,}$/],
+  ['GET', /^\/assets\/[A-Za-z0-9._-]+$/],
+  ['GET', /^\/api\/join\/[A-Za-z0-9_-]{8,}$/],
+  ['POST', /^\/api\/sessions\/[A-Za-z0-9_-]+\/(uploads|text)$/],
+];
+
 export type App = {
   app: FastifyInstance; db: DB; cfg: Config; store: ArtifactStore; bus: EventBus; catalog: ModelCatalog; presets: PresetStore; runner: Runner; sessions: Sessions;
+  /** the resemblance meter (null when off) */
+  judge: ResemblanceJudge | null;
   /** One-time bootstrap code → host session. */
   issueHostCode(): string;
   allowedHosts: Set<string>;
 };
 
-export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: LanControl; catalogFetch?: typeof fetch } = {}): Promise<App> {
+/** judge: the resemblance meter. Real by default; mock in mock mode; OFF when test adapters are supplied unless a test passes its own. */
+export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: LanControl; pub?: PublicControl; catalogFetch?: typeof fetch; judge?: JudgeOpts | null } = {}): Promise<App> {
   const db = openDb(cfg.dbPath);
   const store = new ArtifactStore(db, cfg);
   const bus = new EventBus(db);
@@ -48,11 +75,26 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
     if (cfg.mock) { const m = new MockAdapter(cfg.tmpDir); adapters = { openrouter: m, fal: m }; }
     else adapters = { openrouter: new OpenRouterAdapter({ apiKey: cfg.openrouterKey }), fal: new FalAdapter({ apiKey: cfg.falKey }) };
   }
+  // claude / code / gemini: supplied fakes win (tests); mock mode reuses the mock; otherwise the real thing.
+  const claudeOpts = { cwd: cfg.tmpDir };
+  const renderer = new HtmlRenderer(cfg.tmpDir);
+  const fallback = cfg.mock && !opts.adapters ? adapters.openrouter : null;
+  adapters = {
+    ...adapters,
+    claude: adapters.claude ?? fallback ?? new ClaudeCliAdapter(claudeOpts),
+    code: adapters.code ?? fallback ?? new CodeArtAdapter({ claude: claudeOpts, openrouter: adapters.openrouter, renderer }),
+    gemini: adapters.gemini ?? fallback ?? new GeminiAdapter({ apiKey: cfg.geminiKey, tmpDir: cfg.tmpDir }),
+    local: adapters.local ?? fallback ?? new LocalAdapter(),
+  };
   const runner = new Runner(db, store, cfg, adapters, bus);
+  const judgeOpts = opts.judge !== undefined ? opts.judge : opts.adapters ? null : { mock: cfg.mock };
+  const judge = judgeOpts && process.env.RESEMBLANCE !== 'off' ? new ResemblanceJudge(db, store, cfg, bus, judgeOpts) : null;
+  if (judge) runner.resemblanceFor = (runId) => judge.view(runId);
   const sessions = new Sessions(db, store, runner, bus);
   runner.onStepSucceeded = (runId, idx, def, ms) => {
     if (!cfg.mock) catalog.recordTest(def.modelId, def.type, 'tested-successfully', 'Succeeded in a live run', ms);
     sessions.onStepSucceeded(runId, idx);
+    void judge?.enqueue(runId, idx); // scored in the background; never blocks or feeds the chain
   };
   runner.onStepFailed = (def, kind, message) => {
     if (!cfg.mock && ['auth', 'bad_request', 'unsupported'].includes(kind)) catalog.recordTest(def.modelId, def.type, 'failed', message.slice(0, 200), null);
@@ -61,6 +103,7 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
 
   const app = Fastify({ logger: false, bodyLimit: 2 * 1024 * 1024, trustProxy: false });
   await app.register(cookie);
+  app.addHook('onClose', () => renderer.close()); // the headless browser used by code steps
   await app.register(multipart, { limits: { fileSize: cfg.maxUploadBytes, files: 1, fields: 4 } });
 
   const allowedHosts = new Set<string>([`localhost:${cfg.port}`, `127.0.0.1:${cfg.port}`, `[::1]:${cfg.port}`]);
@@ -69,7 +112,9 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
   const hostCodes = new Set<string>();
   const issueHostCode = () => { const c = newToken(); hostCodes.add(sha256(c)); return c; };
 
-  const isLan = (req: FastifyRequest) => (req.raw as any).isLan === true;
+  const isPublic = (req: FastifyRequest) => (req.raw as any).isPublic === true;
+  // the public listener is treated like the LAN one everywhere (never host powers), plus the route allowlist below
+  const isLan = (req: FastifyRequest) => (req.raw as any).isLan === true || isPublic(req);
   const isHost = (req: FastifyRequest): boolean => {
     if (isLan(req)) return false; // the LAN listener never grants host powers, cookie or not
     const t = req.cookies[HOST_COOKIE];
@@ -82,12 +127,22 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
 
   // Host allowlist + Origin/CSRF check on every request.
   app.addHook('onRequest', async (req, reply) => {
+    if (isPublic(req)) {
+      const path = req.url.split('?')[0];
+      const method = req.method === 'HEAD' ? 'GET' : req.method;
+      if (!PUBLIC_ROUTES.some(([m, re]) => m === method && re.test(path))) return reply.code(404).send({ error: 'Not found.' });
+    }
     const host = String(req.headers.host ?? '').toLowerCase();
     if (!allowedHosts.has(host)) return reply.code(421).send({ error: 'Unrecognized Host header.' });
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       const origin = req.headers.origin;
+      const pubHost = opts.pub?.active()?.host;
       let ok = false;
-      try { ok = !!origin && allowedHosts.has(new URL(origin).host.toLowerCase()) && new URL(origin).protocol === 'http:'; } catch { ok = false; }
+      try {
+        const o = new URL(origin ?? '');
+        // local/LAN pages are plain http; the public link is https on its Tailscale name only
+        ok = allowedHosts.has(o.host.toLowerCase()) && (o.protocol === 'http:' || (o.protocol === 'https:' && !!pubHost && o.host.toLowerCase() === pubHost && isPublic(req)));
+      } catch { ok = false; }
       if (!ok) return reply.code(403).send({ error: 'Cross-origin request rejected.' });
     }
     reply.header('X-Content-Type-Options', 'nosniff');
@@ -192,7 +247,7 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
     const { artifactId } = z.object({ artifactId: z.string().min(1).max(64) }).parse(req.body);
     const a = store.get(artifactId);
     if (!a) return reply.code(404).send({ error: 'Artifact not found.' });
-    if (a.kind === 'video') return reply.code(400).send({ error: 'No step in this build accepts a video as input, so a video cannot be a starting source.' });
+    if (a.kind === 'video' || a.kind === 'audio') return reply.code(400).send({ error: `A run cannot start from ${a.kind === 'video' ? 'a video' : 'audio'}: pick an image or a text as the source.` });
     sessions.setSource(artifactId);
     return sessions.hostView();
   });
@@ -251,6 +306,24 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
     return { active: opts.lan.active() };
   });
 
+  // ---- public phone link (Tailscale Funnel) ---------------------------
+
+  app.get('/api/public', { preHandler: requireHost }, async () => ({ available: !!opts.pub, active: opts.pub?.active() ?? null }));
+  app.post('/api/public', { preHandler: requireHost }, async (req, reply) => {
+    if (!opts.pub) return reply.code(501).send({ error: 'Public link unavailable in this build.' });
+    const { on } = z.object({ on: z.boolean() }).parse(req.body);
+    const before = opts.pub.active();
+    if (before) allowedHosts.delete(before.host);
+    try {
+      await opts.pub.set(on);
+    } catch (e: any) {
+      return reply.code(400).send({ error: String(e?.message ?? e).slice(0, 400) });
+    }
+    const now = opts.pub.active();
+    if (now) allowedHosts.add(now.host);
+    return { available: true, active: now };
+  });
+
   // ---- runs ----------------------------------------------------------
 
   app.get('/api/runs', { preHandler: requireHost }, async () => ({ runs: runner.list() }));
@@ -276,7 +349,7 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
     }
     // Same pipeline, different words: swap ONLY the static instruction of every step (bridge included).
     // The saved preset is untouched; the run's snapshot records exactly what was sent.
-    if (iset) steps = steps.map((st) => ({ ...st, instruction: iset.instructions[st.type], ...(iset.reference && st.type === 'text_to_image' && !st.params?.reference ? { params: { ...st.params, reference: iset.reference } } : {}) }));
+    if (iset) steps = steps.map((st) => ({ ...st, instruction: setInstruction(iset, st.type), ...(iset.reference && st.type === 'text_to_image' && !st.params?.reference ? { params: { ...st.params, reference: iset.reference } } : {}) }));
     const issues = chainIssues({ startingKind: src.kind as any, steps });
     if (issues.length) return reply.code(400).send({ error: `Step ${issues[0].index + 1 - Number(bridged)}: ${issues[0].message}`, issues });
     const id = runner.createRun({ preset: { ...b.preset, steps }, name: iset && iset.id !== 'faithful' ? `${b.preset.name} [${iset.name}]` : undefined, sourceArtifactId: sourceId, budgetUsd: b.budgetUsd === undefined ? cfg.defaultBudgetUsd : b.budgetUsd, interactive: b.interactive });
@@ -287,10 +360,19 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
   // tested model for the type; an optional twist is appended to the static instruction.
   app.post('/api/runs/:id/steps', { preHandler: requireHost }, async (req, reply) => {
     const id = (req.params as any).id;
-    const b = z.object({ type: StepType, twist: z.string().trim().max(500).optional(), modelId: z.string().min(1).max(200).optional(), instructionSet: z.string().max(40).optional(), reference: z.enum(['previous', 'first', 'none']).optional(), keyframes: z.union([z.number().int().min(1).max(MAX_KEYFRAMES), z.literal('first_last')]).optional() }).parse(req.body);
+    const b = z.object({ type: StepType, twist: z.string().trim().max(500).optional(), modelId: z.string().min(1).max(200).optional(), instructionSet: z.string().max(40).optional(), game: z.enum(WORD_GAME_IDS).optional(), tone: z.enum(['', ...SPEECH_TONES]).optional(), voice: z.string().max(40).regex(/^[A-Za-z]+$/).optional(), reference: z.enum(['previous', 'first', 'none']).optional(), keyframes: z.union([z.number().int().min(1).max(MAX_KEYFRAMES), z.literal('first_last')]).optional() }).parse(req.body);
     const iset = b.instructionSet ? instructionSet(b.instructionSet) : null;
     if (b.instructionSet && !iset) return reply.code(400).send({ error: `Unknown instruction set "${b.instructionSet}".` });
-    const def = defaultStep(b.type, { ...(b.modelId ? { modelId: b.modelId } : {}), ...(iset ? { instruction: iset.instructions[b.type] } : {}) });
+    if (b.game && b.type !== 'text_to_text') return reply.code(400).send({ error: 'Word games are text → text steps.' });
+    if ((b.tone !== undefined || b.voice) && b.type !== 'text_to_audio') return reply.code(400).send({ error: 'Tone and voice only apply to text → speech steps.' });
+    // speech: the instruction IS a one-word tone, so a free-text twist would be read aloud (and is refused)
+    if (b.type === 'text_to_audio' && b.twist) return reply.code(400).send({ error: 'Speech takes a tone, not a twist: longer directions get read aloud.' });
+    const def = defaultStep(b.type, { ...(b.modelId ? { modelId: b.modelId } : {}), ...(iset ? { instruction: setInstruction(iset, b.type) } : {}) });
+    if (b.game) def.instruction = WORD_GAMES[b.game].instruction; // the game IS the instruction; a set does not change it
+    if (b.type === 'text_to_audio') {
+      if (b.tone !== undefined) def.instruction = b.tone;
+      if (b.voice) def.params = { ...def.params, voice: b.voice };
+    }
     // Reference image (opt-in; a set like Storyboard turns it on unless the host said 'none').
     const refMode = b.reference ?? iset?.reference;
     if (b.type === 'text_to_image' && refMode && refMode !== 'none') def.params = { ...def.params, reference: refMode };
@@ -309,6 +391,16 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
     return runner.view(id);
   });
   app.get('/api/runs/:id', { preHandler: requireHost }, async (req) => runner.view((req.params as any).id));
+  // (re)score a run with the resemblance meter, e.g. one from before the meter existed
+  app.post('/api/runs/:id/resemblance', { preHandler: requireHost }, async (req, reply) => {
+    const id = (req.params as any).id;
+    const b = z.object({ all: z.boolean().default(false) }).parse(req.body ?? {});
+    if (!judge) return reply.code(409).send({ error: 'The resemblance meter is off (RESEMBLANCE=off).' });
+    runner.view(id); // 404s for an unknown run
+    void judge.scoreRun(id, !b.all);
+    return { ok: true };
+  });
+
   app.post('/api/runs/:id/actions', { preHandler: requireHost }, async (req) => {
     const id = (req.params as any).id;
     const b = z.object({ action: z.enum(['start', 'next', 'pause', 'resume', 'stop', 'retry']), acknowledgeBilling: z.boolean().default(false) }).parse(req.body);
@@ -391,5 +483,5 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
   }
   app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: 'Not found.' }));
 
-  return { app, db, cfg, store, bus, catalog, presets, runner, sessions, issueHostCode, allowedHosts };
+  return { app, db, cfg, store, bus, catalog, presets, runner, sessions, judge, issueHostCode, allowedHosts };
 }
