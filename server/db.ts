@@ -76,6 +76,9 @@ export function openDb(file: string): DB {
   // projector display settings (sound, phone QR, slideshow), driven from the host console or the projector
   const scols = (db.prepare('PRAGMA table_info(sessions)').all() as any[]).map((c) => c.name);
   if (!scols.includes('display')) db.exec("ALTER TABLE sessions ADD COLUMN display TEXT NOT NULL DEFAULT '{}'");
+  // the host can take an artifact off the source lists (earlier sources, incoming uploads) without touching runs
+  const acols = (db.prepare('PRAGMA table_info(artifacts)').all() as any[]).map((c) => c.name);
+  if (!acols.includes('hidden_source')) db.exec('ALTER TABLE artifacts ADD COLUMN hidden_source INTEGER NOT NULL DEFAULT 0');
   return db;
 }
 

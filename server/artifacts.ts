@@ -37,6 +37,14 @@ export class ArtifactStore {
     this.cfg = cfg;
   }
 
+  /** Delete an artifact's row and its file (callers make sure nothing references it any more). */
+  remove(id: string) {
+    const row = this.get(id);
+    if (!row) return;
+    this.db.prepare('DELETE FROM artifacts WHERE id = ?').run(id);
+    if (row.rel_path) fs.rmSync(this.absPath(row), { force: true });
+  }
+
   get(id: string): ArtifactRow | null {
     return (this.db.prepare('SELECT * FROM artifacts WHERE id = ?').get(id) as ArtifactRow | undefined) ?? null;
   }

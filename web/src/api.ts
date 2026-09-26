@@ -146,6 +146,7 @@ export const api = {
   createPreset: (preset: PresetBody) => json<Preset>('/api/presets', 'POST', preset),
   replacePreset: (id: string, preset: PresetBody) => json<Preset>(`/api/presets/${id}`, 'PUT', { confirmReplace: true, preset }),
   deletePreset: (id: string) => json<{ ok: true }>(`/api/presets/${id}`, 'DELETE'),
+  deleteRun: (id: string) => json<{ ok: true }>(`/api/runs/${id}`, 'DELETE'),
   validatePreset: (preset: PresetBody) => json<{ issues: StepIssue[] }>('/api/presets/validate', 'POST', preset),
 
   // session
@@ -155,6 +156,8 @@ export const api = {
   decideUpload: (id: string, decision: 'accept' | 'reject') => json<SessionView>(`/api/session/uploads/${id}/${decision}`, 'POST'),
   sources: () => request<{ sources: SourceCandidate[] }>('/api/sources'),
   setSource: (artifactId: string) => json<SessionView>('/api/session/source', 'POST', { artifactId }),
+  hideSource: (artifactId: string) => json<SessionView>(`/api/sources/${artifactId}/hide`, 'POST'),
+  clearSources: () => json<{ cleared: number; session: SessionView }>('/api/sources/clear', 'POST', { confirm: true }),
   selectRun: (runId: string | null, replay: boolean) => json<SessionView>('/api/session/select-run', 'POST', { runId, replay }),
   reveal: (action: RevealAction) => json<SessionView>('/api/session/reveal', 'POST', action),
   desktopUpload: (file: File) => {

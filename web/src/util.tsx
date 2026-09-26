@@ -115,3 +115,29 @@ export function CopyText({ value }: { value: string }) {
     </div>
   );
 }
+
+/** A destructive action behind a second click: the first click arms it (red, "sure?"), a second within 4 s does it. */
+export function ConfirmButton({ label, confirmLabel, disabled, title, className, onConfirm }: { label: string; confirmLabel: string; disabled?: boolean; title?: string; className?: string; onConfirm: () => void }) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [armed]);
+  return (
+    <button
+      type="button"
+      className={cx('btn btn-xs', armed && 'btn-danger', className)}
+      disabled={disabled}
+      title={title}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (!armed) return setArmed(true);
+        setArmed(false);
+        onConfirm();
+      }}
+    >
+      {armed ? confirmLabel : label}
+    </button>
+  );
+}

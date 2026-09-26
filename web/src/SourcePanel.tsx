@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import { api, mediaUrl, type LanView, type PublicView, type SessionView, type SourceCandidate } from './api.ts';
-import { Banner, CopyText, Pill, Section, cx, fmtTime } from './util.tsx';
+import { Banner, ConfirmButton, CopyText, Pill, Section, cx, fmtTime } from './util.tsx';
 
 function Qr({ value }: { value: string }) {
   const [src, setSrc] = useState<string | null>(null);
@@ -40,6 +40,8 @@ export function SourcePanel({
   const [text, setText] = useState('');
   const [sources, setSources] = useState<SourceCandidate[] | null>(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [libVersion, setLibVersion] = useState(0); // bumped when sources are removed, to reload the list
+  const [clearing, setClearing] = useState<{ count: number | null } | null>(null); // the "clear all" warning is open
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [pub, setPub] = useState<PublicView | null>(null);
   useEffect(() => {
@@ -58,7 +60,19 @@ export function SourcePanel({
       (e) => alive && onError(String((e as Error).message)),
     );
     return () => { alive = false; };
-  }, [libraryOpen, session?.source?.id, session?.uploads.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [libraryOpen, libVersion, session?.source?.id, session?.uploads.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const hide = (artifactId: string) => guard(async () => { await api.hideSource(artifactId); setLibVersion((v) => v + 1); });
+  const openClear = () => {
+    setClearing({ count: null });
+    api.sources().then((r) => setClearing((c) => (c ? { count: r.sources.length } : c)), () => {});
+  };
+  const clearAll = () =>
+    guard(async () => {
+      await api.clearSources();
+      setClearing(null);
+      setLibVersion((v) => v + 1);
+    });
 
   useEffect(() => {
     if (lan?.active) setSelected(lan.active.address);
@@ -262,6 +276,7 @@ export function SourcePanel({
                 <button type="button" className="btn btn-xs" disabled={busy || u.status === 'rejected'} onClick={() => guard(() => api.decideUpload(u.id, 'reject'))}>
                   Reject
                 </button>
+                <ConfirmButton label="Remove" confirmLabel="Remove?" disabled={busy} title="Take this upload off the source lists (click twice). Runs that used it keep it." onConfirm={() => void hide(u.artifact.id)} />
               </div>
             </div>
           ))}
@@ -273,10 +288,31 @@ export function SourcePanel({
 
       {/* --- earlier sources ------------------------------------------- */}
       <div>
-        <button type="button" className="lbl flex w-full items-center gap-1 text-left hover:text-neutral-200" onClick={() => setLibraryOpen((o) => !o)}>
-          <span className="inline-block w-3">{libraryOpen ? '▾' : '▸'}</span>
-          Earlier sources {sources ? `(${sources.length})` : ''}
-        </button>
+        <div className="flex items-center gap-2">
+          <button type="button" className="lbl flex flex-1 items-center gap-1 text-left hover:text-neutral-200" onClick={() => setLibraryOpen((o) => !o)}>
+            <span className="inline-block w-3">{libraryOpen ? '▾' : '▸'}</span>
+            Earlier sources {sources ? `(${sources.length})` : ''}
+          </button>
+          <button type="button" className="btn btn-xs" disabled={busy || !!clearing} onClick={openClear} title="Empty every source list (asks first)">
+            Clear all sources…
+          </button>
+        </div>
+        {clearing && (
+          <div className="mt-2 space-y-2">
+            <Banner kind="warn">
+              <b>Clear all sources?</b> This removes {clearing.count == null ? 'every earlier source' : `all ${clearing.count} earlier source${clearing.count === 1 ? '' : 's'}`}, the incoming
+              uploads and the current source from these lists. Runs and their results are kept. This can’t be undone.
+            </Banner>
+            <div className="flex gap-2">
+              <button type="button" className="btn btn-danger" disabled={busy} onClick={() => void clearAll()}>
+                Clear all sources
+              </button>
+              <button type="button" className="btn" disabled={busy} onClick={() => setClearing(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
         {libraryOpen && (
           <>
             <p className="mt-1 mb-2 text-[11px] text-neutral-500">
@@ -289,14 +325,14 @@ export function SourcePanel({
             ) : (
               <div className="grid max-h-80 grid-cols-2 gap-2 overflow-y-auto pr-1">
                 {sources.map((c) => (
+                  <div key={c.artifact.id} className="group relative">
                   <button
-                    key={c.artifact.id}
                     type="button"
                     disabled={busy || c.isCurrent}
                     title={`${c.label} — use as the next run's source`}
                     onClick={() => guard(() => api.setSource(c.artifact.id))}
                     className={cx(
-                      'flex items-start gap-2 rounded-md border p-1.5 text-left transition-colors',
+                      'flex w-full items-start gap-2 rounded-md border p-1.5 text-left transition-colors',
                       c.isCurrent ? 'border-emerald-700 bg-emerald-950/40' : 'border-neutral-800 bg-neutral-900/40 hover:border-neutral-600',
                     )}
                   >
@@ -313,6 +349,15 @@ export function SourcePanel({
                       {c.isCurrent && <Pill tone="ok">current source</Pill>}
                     </span>
                   </button>
+                  <ConfirmButton
+                    label="✕"
+                    confirmLabel="Remove?"
+                    disabled={busy}
+                    title="Take this off the source lists (click twice). Runs keep it."
+                    className="absolute right-1 top-1 opacity-60 group-hover:opacity-100"
+                    onConfirm={() => void hide(c.artifact.id)}
+                  />
+                  </div>
                 ))}
               </div>
             )}

@@ -104,6 +104,10 @@ export default function Host() {
       const [s, r] = await Promise.all([api.session(), api.runs()]);
       setSession(s);
       setRuns(r.runs);
+      if (openRunRef.current && !r.runs.some((x) => x.id === openRunRef.current)) {
+        openRunRef.current = null; // deleted
+        setOpenRunId(null);
+      }
       const id = openRunRef.current ?? s.selectedRunId;
       if (id) {
         const v = await api.run(id);
@@ -128,7 +132,7 @@ export default function Host() {
   // Load a sensible default pipeline once presets arrive (no server mutation).
   useEffect(() => {
     if (loadedPresetId || editor.steps.length || presets.length === 0) return;
-    const p = presets.find((x) => x.name === 'Quick demo') ?? presets[0];
+    const p = presets.find((x) => x.id === 'builtin_demo1') ?? presets[0];
     setLoadedPresetId(p.id);
     setEditor({ schemaVersion: PRESET_SCHEMA_VERSION, name: p.name, startingKind: p.startingKind, steps: structuredClone(p.steps) });
   }, [presets, loadedPresetId, editor.steps.length]);

@@ -243,6 +243,16 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
     return sessions.hostView();
   });
   app.get('/api/sources', { preHandler: requireHost }, async () => ({ sources: sessions.sourceCandidates() }));
+  // take one source off the lists, or all of them (the host console asks twice first); runs are never touched
+  app.post('/api/sources/:id/hide', { preHandler: requireHost }, async (req, reply) => {
+    if (!sessions.hideSource((req.params as any).id)) return reply.code(404).send({ error: 'Source not found.' });
+    return sessions.hostView();
+  });
+  app.post('/api/sources/clear', { preHandler: requireHost }, async (req) => {
+    z.object({ confirm: z.literal(true) }).parse(req.body);
+    const cleared = sessions.clearSources();
+    return { cleared, session: sessions.hostView() };
+  });
   app.post('/api/session/source', { preHandler: requireHost }, async (req, reply) => {
     const { artifactId } = z.object({ artifactId: z.string().min(1).max(64) }).parse(req.body);
     const a = store.get(artifactId);
@@ -402,6 +412,10 @@ export async function buildApp(cfg: Config, opts: { adapters?: Adapters; lan?: L
     return runner.view(id);
   });
   app.get('/api/runs/:id', { preHandler: requireHost }, async (req) => runner.view((req.params as any).id));
+  app.delete('/api/runs/:id', { preHandler: requireHost }, async (req, reply) => {
+    if (!runner.deleteRun((req.params as any).id)) return reply.code(404).send({ error: 'Run not found.' });
+    return { ok: true };
+  });
   // (re)score a run with the resemblance meter, e.g. one from before the meter existed
   app.post('/api/runs/:id/resemblance', { preHandler: requireHost }, async (req, reply) => {
     const id = (req.params as any).id;

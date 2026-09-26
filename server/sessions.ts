@@ -1,4 +1,4 @@
-import { type DB, newId, newToken, now, sha256 } from './db.ts';
+import { type DB, newId, newToken, now, sha256, tx } from './db.ts';
 import type { ArtifactStore } from './artifacts.ts';
 import type { Runner } from './runner.ts';
 import type { EventBus } from './events.ts';
@@ -70,6 +70,31 @@ export class Sessions {
     this.bus.publish(null, 'session.changed');
   }
 
+  /** Host-only: take one artifact off the source lists (earlier sources, incoming uploads, current source). Runs keep it. */
+  hideSource(artifactId: string): boolean {
+    const found = tx(this.db, () => {
+      if (!Number(this.db.prepare('UPDATE artifacts SET hidden_source = 1 WHERE id = ?').run(artifactId).changes)) return false;
+      this.db.prepare('DELETE FROM uploads WHERE artifact_id = ?').run(artifactId);
+      this.db.prepare('UPDATE sessions SET source_artifact_id = NULL WHERE source_artifact_id = ?').run(artifactId);
+      return true;
+    });
+    if (found) this.bus.publish(null, 'session.changed');
+    return found;
+  }
+
+  /** Host-only: empty every source list at once. Runs and their results are kept. Returns how many sources went. */
+  clearSources(): number {
+    const n = tx(this.db, () => {
+      const listed = this.sourceCandidates(100_000).length;
+      this.db.prepare("UPDATE artifacts SET hidden_source = 1 WHERE hidden_source = 0 AND kind IN ('image', 'text')").run();
+      this.db.prepare('DELETE FROM uploads').run();
+      this.db.prepare('UPDATE sessions SET source_artifact_id = NULL').run();
+      return listed;
+    });
+    this.bus.publish(null, 'session.changed');
+    return n;
+  }
+
   /**
    * Everything the host may start a new run from: this session's uploads, and the source or any
    * output of any earlier run. Video is excluded because no step in this build accepts video input.
@@ -86,7 +111,7 @@ export class Sessions {
               WHERE s.artifact_id = a.id ORDER BY r2.created_at LIMIT 1)
           ) AS label
         FROM artifacts a
-        WHERE a.kind IN ('image', 'text')
+        WHERE a.kind IN ('image', 'text') AND a.hidden_source = 0
       ) WHERE label IS NOT NULL
       ORDER BY created_at DESC LIMIT ?`).all(limit) as any[];
     const current = this.current().source_artifact_id;

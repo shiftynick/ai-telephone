@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { ArtifactView, AttemptView, RunView, StepView } from '../../shared/types.ts';
 import { INSTRUCTION_SETS, STEP_TYPES, instructionSet } from '../../shared/types.ts';
 import { ALLOWED_ACTIONS as ALLOWED, ApiError, api, mediaUrl, type RunAction, type RunListItem } from './api.ts';
-import { Banner, Pill, Section, cx, fmtBytes, fmtDuration, fmtMoney, fmtTime, useNow } from './util.tsx';
+import { Banner, ConfirmButton, Pill, Section, cx, fmtBytes, fmtDuration, fmtMoney, fmtTime, useNow } from './util.tsx';
 
 const statusTone = (s: string) =>
   s === 'completed' || s === 'succeeded' ? 'ok' : s === 'failed' ? 'error' : s === 'running' ? 'accent' : s === 'paused' || s === 'unknown' ? 'warn' : 'neutral';
@@ -276,6 +276,20 @@ export default function RunPanel({
               >
                 Replay on projector
               </button>
+              <ConfirmButton
+                label="Delete"
+                confirmLabel="Delete run?"
+                disabled={busy || r.status === 'running'}
+                title={r.status === 'running' ? 'Stop the run before deleting it' : 'Delete this run and its results (click twice)'}
+                onConfirm={async () => {
+                  try {
+                    await api.deleteRun(r.id);
+                    onChanged();
+                  } catch (e) {
+                    onError(String((e as Error).message));
+                  }
+                }}
+              />
             </div>
           ))}
         </div>

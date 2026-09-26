@@ -394,6 +394,37 @@ export class Runner {
     };
   }
 
+  /**
+   * Host-only: delete a run and what only it produced (step outputs and their files). A running run is refused.
+   * An output still used elsewhere (another run's source or input, an upload, the current source) is kept.
+   */
+  deleteRun(id: string): boolean {
+    const r = this.db.prepare('SELECT status FROM runs WHERE id = ?').get(id) as any;
+    if (!r) return false;
+    if (r.status === 'running' || this.active?.runId === id) throw new RunError(409, 'This run is running. Stop it first, then delete it.');
+    const orphans = tx(this.db, () => {
+      const produced = (this.db.prepare(`
+        SELECT artifact_id AS id FROM step_executions WHERE run_id = ?1 AND artifact_id IS NOT NULL
+        UNION SELECT a.id FROM artifacts a JOIN attempts t ON t.id = a.producing_attempt_id JOIN step_executions s ON s.id = t.step_execution_id WHERE s.run_id = ?1`).all(id) as any[]).map((x) => x.id as string);
+      this.db.prepare('DELETE FROM attempts WHERE step_execution_id IN (SELECT id FROM step_executions WHERE run_id = ?)').run(id);
+      this.db.prepare('DELETE FROM step_executions WHERE run_id = ?').run(id);
+      this.db.prepare('DELETE FROM resemblance WHERE run_id = ?').run(id);
+      this.db.prepare('DELETE FROM events WHERE run_id = ?').run(id);
+      this.db.prepare('UPDATE sessions SET selected_run_id = NULL, replay = 0 WHERE selected_run_id = ?').run(id);
+      this.db.prepare('DELETE FROM runs WHERE id = ?').run(id);
+      const used = this.db.prepare(`
+        SELECT 1 FROM runs WHERE source_artifact_id = ?1
+        UNION ALL SELECT 1 FROM step_executions WHERE artifact_id = ?1 OR predecessor_artifact_id = ?1
+        UNION ALL SELECT 1 FROM uploads WHERE artifact_id = ?1
+        UNION ALL SELECT 1 FROM sessions WHERE source_artifact_id = ?1 LIMIT 1`);
+      return produced.filter((a) => !used.get(a));
+    });
+    for (const a of orphans) this.store.remove(a);
+    this.bus.publish(null, 'run.deleted', { runId: id });
+    this.bus.publish(null, 'present.changed');
+    return true;
+  }
+
   list() {
     return (this.db.prepare('SELECT id, name, status, created_at, imported, interactive, snapshot FROM runs ORDER BY created_at DESC LIMIT 100').all() as any[]).map((r) => ({
       id: r.id, name: r.name, status: r.status as RunStatus, createdAt: r.created_at, imported: !!r.imported, interactive: !!r.interactive, stepCount: JSON.parse(r.snapshot).steps.length,
